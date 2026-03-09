@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Play, Square, Plus, Minus, RotateCcw, Bell, CheckSquare, Lightbulb, Check, X, Tags, Calendar, Clock, ChevronRight, ChevronDown, ChevronUp, Trash2, ArrowRight, Pencil, History, BellRing, AlignLeft, Pill, AlertTriangle, BarChart2, PieChart, Lock, Maximize2, Headphones, Volume2, Volume1 } from 'lucide-react';
 import { collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, increment, where } from 'firebase/firestore';
 import { db } from './firebase';
@@ -187,7 +187,20 @@ export default function App() {
   const [isZenMode, setIsZenMode] = useState(false);
 
   // Daily Goal & Streak State
-  const [dailyGoal, setDailyGoal] = useState(8); // Pomodoros per day
+  const [dailyGoalMinutes, setDailyGoalMinutes] = useState(() => {
+    const saved = localStorage.getItem('dailyGoalMinutes');
+    return saved ? parseInt(saved, 10) : 120;
+  });
+  const [isEditingGoal, setIsEditingGoal] = useState(false);
+  const [tempGoal, setTempGoal] = useState(dailyGoalMinutes.toString());
+
+  const focusedMinutesToday = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const todayLogs = focusLogs.filter(log => log.date.startsWith(today) && log.status === 'completed');
+    const totalSeconds = todayLogs.reduce((acc, log) => acc + log.duration, 0);
+    return Math.floor(totalSeconds / 60);
+  }, [focusLogs]);
+
   const [streak, setStreak] = useState(0);
   const [lastActiveDate, setLastActiveDate] = useState<string | null>(null);
 
@@ -202,158 +215,14 @@ export default function App() {
 
   useEffect(() => {
     const today = new Date().toISOString().split('T')[0];
-    if (pomodorosCompleted >= dailyGoal && lastActiveDate !== today) {
+    if (focusedMinutesToday >= dailyGoalMinutes && lastActiveDate !== today) {
       const newStreak = (lastActiveDate === new Date(Date.now() - 86400000).toISOString().split('T')[0]) ? streak + 1 : 1;
       setStreak(newStreak);
       setLastActiveDate(today);
       localStorage.setItem('pomodoroStreak', JSON.stringify({ streak: newStreak, lastActiveDate: today }));
       // Optional: Celebration confetti or sound
     }
-  }, [pomodorosCompleted, dailyGoal, lastActiveDate, streak]);
-
-  // Focus Sounds State (Web Audio API)
-  type SoundOption = 'none' | 'white' | 'pink' | 'brown' | 'blue' | 'violet';
-  const [selectedSound, setSelectedSound] = useState<SoundOption>('none');
-  const [volume, setVolume] = useState(0.5);
-  const [isSoundMenuOpen, setIsSoundMenuOpen] = useState(false);
-  
-  // Refs for Web Audio API
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
-  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
-
-  // Noise Generation Helper
-  const createNoiseBuffer = (ctx: AudioContext, type: SoundOption): AudioBuffer => {
-    const bufferSize = 2 * ctx.sampleRate; // 2 seconds buffer
-    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const output = buffer.getChannelData(0);
-
-    if (type === 'white') {
-      for (let i = 0; i < bufferSize; i++) {
-        output[i] = Math.random() * 2 - 1;
-      }
-    } else if (type === 'pink') {
-      let b0, b1, b2, b3, b4, b5, b6;
-      b0 = b1 = b2 = b3 = b4 = b5 = b6 = 0.0;
-      for (let i = 0; i < bufferSize; i++) {
-        const white = Math.random() * 2 - 1;
-        b0 = 0.99886 * b0 + white * 0.0555179;
-        b1 = 0.99332 * b1 + white * 0.0750759;
-        b2 = 0.96900 * b2 + white * 0.1538520;
-        b3 = 0.86650 * b3 + white * 0.3104856;
-        b4 = 0.55000 * b4 + white * 0.5329522;
-        b5 = -0.7616 * b5 - white * 0.0168980;
-        output[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
-        output[i] *= 0.11; // (roughly) compensate for gain
-        b6 = white * 0.115926;
-      }
-    } else if (type === 'brown') {
-      let lastOut = 0.0;
-      for (let i = 0; i < bufferSize; i++) {
-        const white = Math.random() * 2 - 1;
-        output[i] = (lastOut + (0.02 * white)) / 1.02;
-        lastOut = output[i];
-        output[i] *= 3.5; // (roughly) compensate for gain
-      }
-    } else if (type === 'blue') {
-        // Approximate Blue noise (High pass filtered white noise)
-        let lastIn = 0;
-        for (let i = 0; i < bufferSize; i++) {
-            const white = Math.random() * 2 - 1;
-            output[i] = white - lastIn;
-            lastIn = white;
-            output[i] *= 0.5; // Compensate
-        }
-    } else if (type === 'violet') {
-        // Approximate Violet noise (Differentiated white noise)
-        let lastIn = 0;
-        let lastOut = 0;
-        for (let i = 0; i < bufferSize; i++) {
-            const white = Math.random() * 2 - 1;
-            output[i] = white - lastIn; // First derivative approximation
-            lastIn = white;
-            // Additional high-pass boost for violet characteristics
-             output[i] *= 0.5;
-        }
-    }
-
-    return buffer;
-  };
-
-  const stopAudio = () => {
-    if (sourceNodeRef.current) {
-      try {
-        sourceNodeRef.current.stop();
-        sourceNodeRef.current.disconnect();
-      } catch (e) {
-        // Ignore errors if already stopped
-      }
-      sourceNodeRef.current = null;
-    }
-  };
-
-  const playAudio = () => {
-    // Ensure context exists
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    }
-    
-    // Resume context if suspended (browser policy)
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
-
-    stopAudio(); // Stop any existing sound
-
-    if (selectedSound === 'none') return;
-
-    try {
-      const ctx = audioContextRef.current;
-      const buffer = createNoiseBuffer(ctx, selectedSound);
-      
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.loop = true;
-      
-      const gainNode = ctx.createGain();
-      gainNode.gain.value = volume * 0.5; // Master scaling to avoid clipping
-      
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      
-      source.start();
-      
-      sourceNodeRef.current = source;
-      gainNodeRef.current = gainNode;
-    } catch (error) {
-      console.error("Audio generation failed:", error);
-    }
-  };
-
-  // Effect to handle Play/Stop based on Timer state
-  useEffect(() => {
-    if (isRunning && mode === 'work' && selectedSound !== 'none') {
-      playAudio();
-    } else {
-      stopAudio();
-    }
-    
-    // Cleanup on unmount
-    return () => {
-      stopAudio();
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-        audioContextRef.current = null;
-      }
-    };
-  }, [isRunning, mode, selectedSound]);
-
-  // Effect to handle Volume changes
-  useEffect(() => {
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = volume * 0.5;
-    }
-  }, [volume]);
+  }, [focusedMinutesToday, dailyGoalMinutes, lastActiveDate, streak]);
 
   // Tasks State
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -1256,6 +1125,9 @@ export default function App() {
     }
     
     setIsRunning(true);
+    if (mode === 'work') {
+      setIsZenMode(true);
+    }
   };
 
 
@@ -1352,17 +1224,42 @@ export default function App() {
     }
   };
 
-  const confirmReset = () => {
-    resetTimer();
+  const confirmReset = (completedTask: boolean = false) => {
+    resetTimer(completedTask);
     setIsConfirmingReset(false);
   };
 
-  const resetTimer = () => {
-    // Penalty for resetting during work
-    if (isRunning && mode === 'work') {
-      addFocusLog('abandoned', totalTime - timeLeft);
-      // Optional: Show toast or alert
-      // alert("⚠️ Sesión abandonada. Se ha registrado en tu historial de disciplina.");
+  const resetTimer = (completedTask: boolean = false) => {
+    if (completedTask) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      
+      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+        setTasks(prevTasks => prevTasks.map(t => 
+          selectedPendingTasks.some(spt => spt.id === t.id) 
+            ? { ...t, completed: true, selected: false, completedAt: todayStr } 
+            : t
+        ));
+      } else {
+        Promise.all(selectedPendingTasks.map(task => {
+          const taskRef = doc(db, 'tasks', task.id);
+          return updateDoc(taskRef, {
+            completed: true,
+            selected: false,
+            completedAt: todayStr
+          });
+        })).catch(error => {
+          console.error("Error completing tasks on reset: ", error);
+        });
+      }
+
+      if (isRunning && mode === 'work') {
+        addFocusLog('completed', totalTime - timeLeft);
+      }
+    } else {
+      // Penalty for resetting during work
+      if (isRunning && mode === 'work') {
+        addFocusLog('abandoned', totalTime - timeLeft);
+      }
     }
 
     setIsRunning(false);
@@ -2216,61 +2113,25 @@ export default function App() {
           <>
             {/* Zen Mode Overlay - Only active when running and Zen Mode is on */}
             {isZenMode && isRunning && (
-              <div className="fixed inset-0 z-50 bg-neutral-950 flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
-                <div className="text-center space-y-12 w-full max-w-2xl">
-                  
-                  {/* Timer */}
-                  <div className="text-8xl sm:text-9xl md:text-[12rem] leading-none font-light tracking-tighter font-mono text-emerald-400/90 select-none">
-                    {formatTime(timeLeft)}
-                  </div>
-                  
-                  {/* Task Title */}
-                  {selectedPendingTasks.length > 0 && (
-                    <div className="text-xl sm:text-2xl md:text-3xl font-medium text-neutral-400 max-w-3xl mx-auto leading-relaxed">
-                      {selectedPendingTasks[0].title}
-                    </div>
-                  )}
+              <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
+                <div className="flex items-center justify-center gap-12 opacity-30 hover:opacity-100 active:opacity-100 transition-opacity duration-300">
+                  {/* Exit Zen Mode */}
+                  <button 
+                    onClick={() => setIsZenMode(false)}
+                    className="p-6 rounded-full bg-neutral-900 hover:bg-neutral-800 text-neutral-500 hover:text-white transition-all transform hover:scale-110 shadow-2xl border border-neutral-800"
+                    title="Salir del Modo Zen"
+                  >
+                    <Maximize2 size={32} />
+                  </button>
 
-                  {/* Minimal Controls */}
-                  <div className="flex items-center justify-center gap-8 mt-16 opacity-0 hover:opacity-100 transition-opacity duration-300">
-                    {/* Sound Toggle (Minimal) */}
-                    <button 
-                      onClick={() => {
-                        const sounds: SoundOption[] = ['none', 'white', 'pink', 'brown', 'blue', 'violet'];
-                        const currentIndex = sounds.indexOf(selectedSound);
-                        const nextIndex = (currentIndex + 1) % sounds.length;
-                        setSelectedSound(sounds[nextIndex]);
-                      }}
-                      className="p-4 rounded-full bg-neutral-900/50 hover:bg-neutral-800 text-neutral-500 hover:text-emerald-400 transition-all group relative"
-                      title="Cambiar Sonido"
-                    >
-                      {selectedSound === 'none' ? <Volume1 size={24} /> : <Headphones size={24} />}
-                      <span className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-xs text-neutral-500 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                        {selectedSound === 'none' ? 'Silencio' : selectedSound.charAt(0).toUpperCase() + selectedSound.slice(1)}
-                      </span>
-                    </button>
-
-                    {/* Exit Zen Mode */}
-                    <button 
-                      onClick={() => setIsZenMode(false)}
-                      className="p-6 rounded-full bg-neutral-900 hover:bg-neutral-800 text-neutral-500 hover:text-white transition-all transform hover:scale-110 shadow-2xl border border-neutral-800"
-                      title="Salir del Modo Zen"
-                    >
-                      <Maximize2 size={32} />
-                    </button>
-
-                    {/* Capture Idea (Minimal) */}
-                    <button 
-                      onClick={() => setIsAddingIdea(true)}
-                      className="p-4 rounded-full bg-neutral-900/50 hover:bg-neutral-800 text-neutral-500 hover:text-yellow-400 transition-all group relative"
-                      title="Capturar Idea"
-                    >
-                      <Lightbulb size={24} />
-                      <span className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-xs text-neutral-500 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                        Idea
-                      </span>
-                    </button>
-                  </div>
+                  {/* Capture Idea (Minimal) */}
+                  <button 
+                    onClick={() => setIsAddingIdea(true)}
+                    className="p-6 rounded-full bg-neutral-900 hover:bg-neutral-800 text-neutral-500 hover:text-yellow-400 transition-all transform hover:scale-110 shadow-2xl border border-neutral-800"
+                    title="Capturar Idea"
+                  >
+                    <Lightbulb size={32} />
+                  </button>
                 </div>
               </div>
             )}
@@ -2307,27 +2168,33 @@ export default function App() {
                 <p className={`text-sm font-medium uppercase tracking-widest ${isWork ? 'text-neutral-400' : 'text-blue-400'}`}>
                   {mode === 'work' ? 'Enfoque' : mode === 'shortBreak' ? 'Descanso Corto' : 'Descanso Largo'}
                 </p>
-                {!isWork && (
-                  <p className="text-xs text-blue-500/70 mt-2">Pomodoros completados: {pomodorosCompleted}</p>
-                )}
               </div>
             </div>
 
             {/* Daily Goal & Streak */}
             <div className="w-full flex items-center justify-between mb-6 px-2">
-              <div className="flex items-center gap-2">
-                <div className="flex -space-x-1">
-                  {Array.from({ length: Math.min(dailyGoal, 8) }).map((_, i) => (
-                    <div 
-                      key={i} 
-                      className={`w-3 h-8 rounded-full transform -skew-x-12 ${i < pomodorosCompleted ? 'bg-emerald-500' : 'bg-neutral-800 border border-neutral-700'}`}
-                    ></div>
-                  ))}
+              <div 
+                className="flex flex-col gap-1.5 cursor-pointer group flex-1 mr-4"
+                onClick={() => {
+                  setTempGoal(dailyGoalMinutes.toString());
+                  setIsEditingGoal(true);
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-neutral-400 font-medium uppercase tracking-wider">Minutos Enfocados</span>
+                  <span className="text-[10px] text-neutral-500 group-hover:text-neutral-300 transition-colors">
+                    {focusedMinutesToday} / {dailyGoalMinutes} min
+                  </span>
                 </div>
-                <span className="text-xs text-neutral-500 ml-2">{pomodorosCompleted}/{dailyGoal}</span>
+                <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-emerald-500 transition-all duration-500"
+                    style={{ width: `${Math.min(100, (focusedMinutesToday / dailyGoalMinutes) * 100)}%` }}
+                  ></div>
+                </div>
               </div>
               
-              <div className="flex items-center gap-2 bg-neutral-800/50 px-3 py-1.5 rounded-full border border-neutral-700/50">
+              <div className="flex items-center gap-2 bg-neutral-800/50 px-3 py-1.5 rounded-full border border-neutral-700/50 shrink-0">
                 <span className="text-orange-500">🔥</span>
                 <span className="text-sm font-bold text-neutral-200">{streak}</span>
                 <span className="text-[10px] text-neutral-500 uppercase tracking-wider">Días</span>
@@ -2335,7 +2202,7 @@ export default function App() {
             </div>
 
             {/* Controles Principales */}
-            <div className="w-full grid grid-cols-6 gap-2 mb-10">
+            <div className="w-full grid grid-cols-5 gap-2 mb-10">
               <button 
                 onClick={() => setIsAddingTask(true)}
                 className="col-span-1 flex flex-col items-center justify-center p-2 bg-neutral-800 hover:bg-neutral-700 rounded-2xl transition-colors text-neutral-300"
@@ -2375,49 +2242,7 @@ export default function App() {
                 <Maximize2 size={18} className="mb-1" />
                 <span className="text-[9px] font-medium uppercase">Zen</span>
               </button>
-
-              <button 
-                onClick={() => setIsSoundMenuOpen(!isSoundMenuOpen)}
-                className={`col-span-1 flex flex-col items-center justify-center p-2 rounded-2xl transition-colors ${selectedSound !== 'none' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50' : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'}`}
-              >
-                <Headphones size={18} className="mb-1" />
-                <span className="text-[9px] font-medium uppercase">Sonido</span>
-              </button>
             </div>
-
-            {/* Sound Menu Overlay */}
-            {isSoundMenuOpen && (
-              <div className="absolute top-24 right-4 z-20 bg-neutral-800 p-4 rounded-2xl border border-neutral-700 shadow-xl w-64">
-                <h4 className="text-sm font-semibold text-neutral-300 mb-3 flex items-center gap-2">
-                  <Volume2 size={16} />
-                  Sonido de Fondo
-                </h4>
-                <div className="space-y-2 mb-4">
-                  {(['none', 'white', 'pink', 'brown', 'blue', 'violet'] as const).map(sound => (
-                    <button
-                      key={sound}
-                      onClick={() => setSelectedSound(sound)}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${selectedSound === sound ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'hover:bg-neutral-700 text-neutral-400'}`}
-                    >
-                      {sound === 'none' ? 'Silencio' : sound.charAt(0).toUpperCase() + sound.slice(1)}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Volume1 size={16} className="text-neutral-500" />
-                  <input 
-                    type="range" 
-                    min="0" 
-                    max="1" 
-                    step="0.1" 
-                    value={volume} 
-                    onChange={(e) => setVolume(parseFloat(e.target.value))}
-                    className="w-full accent-emerald-500 h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <Volume2 size={16} className="text-neutral-500" />
-                </div>
-              </div>
-            )}
 
             {/* Reset Confirmation Modal */}
             {isConfirmingReset && (
@@ -2426,22 +2251,29 @@ export default function App() {
                   <div className="w-16 h-16 bg-rose-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
                     <AlertTriangle size={32} className="text-rose-400" />
                   </div>
-                  <h3 className="text-lg font-semibold text-neutral-200 mb-2">¿Abandonar Sesión?</h3>
+                  <h3 className="text-lg font-semibold text-neutral-200 mb-2">¿Detener Sesión?</h3>
                   <p className="text-sm text-neutral-400 mb-6">
-                    Si reinicias ahora, esta sesión contará como <span className="text-rose-400 font-bold">abandonada</span> y afectará tu índice de disciplina.
+                    ¿Por qué quieres detener el temporizador?
                   </p>
-                  <div className="flex gap-3">
+                  <div className="flex flex-col gap-3">
                     <button 
-                      onClick={() => setIsConfirmingReset(false)}
-                      className="flex-1 py-3 rounded-xl bg-neutral-700 hover:bg-neutral-600 text-neutral-200 font-medium transition-colors"
+                      onClick={() => confirmReset(true)}
+                      className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-medium transition-colors flex items-center justify-center gap-2"
                     >
-                      Cancelar
+                      <Check size={18} />
+                      Ya terminé la tarea
                     </button>
                     <button 
-                      onClick={confirmReset}
-                      className="flex-1 py-3 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-medium transition-colors"
+                      onClick={() => confirmReset(false)}
+                      className="w-full py-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 font-medium transition-colors border border-rose-500/30"
                     >
-                      Sí, Abandonar
+                      Abandonar (Penalización)
+                    </button>
+                    <button 
+                      onClick={() => setIsConfirmingReset(false)}
+                      className="w-full py-3 rounded-xl bg-neutral-700 hover:bg-neutral-600 text-neutral-200 font-medium transition-colors mt-2"
+                    >
+                      Cancelar
                     </button>
                   </div>
                 </div>
@@ -3259,6 +3091,44 @@ export default function App() {
         )}
 
       </main>
+
+      {/* Modal: Edit Daily Goal */}
+      {isEditingGoal && (
+        <div className="fixed inset-0 z-50 bg-neutral-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="text-lg font-semibold text-neutral-100 mb-4">Meta Diaria (Minutos)</h3>
+            <input
+              type="number"
+              value={tempGoal}
+              onChange={(e) => setTempGoal(e.target.value)}
+              className="w-full bg-neutral-800 text-neutral-100 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 mb-6"
+              placeholder="Ej: 120"
+              autoFocus
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setIsEditingGoal(false)}
+                className="flex-1 py-3 rounded-xl font-medium text-neutral-400 bg-neutral-800 hover:bg-neutral-700 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  const val = parseInt(tempGoal, 10);
+                  if (!isNaN(val) && val > 0) {
+                    setDailyGoalMinutes(val);
+                    localStorage.setItem('dailyGoalMinutes', val.toString());
+                  }
+                  setIsEditingGoal(false);
+                }}
+                className="flex-1 py-3 rounded-xl font-medium text-neutral-950 bg-emerald-500 hover:bg-emerald-400 transition-colors"
+              >
+                Guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Navegación Inferior */}
       <nav className="fixed bottom-0 w-full flex border-t border-neutral-800 bg-neutral-950/80 backdrop-blur-md pb-safe z-40">

@@ -1135,49 +1135,116 @@ export default function App() {
 
   // Timer Logic
   const expectedEndTimeRef = useRef<number | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+
+  const sendNotification = async (title: string, body: string) => {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    try {
+      if ('serviceWorker' in navigator) {
+        const registration = await navigator.serviceWorker.ready;
+        if (registration && 'showNotification' in registration) {
+          await registration.showNotification(title, {
+            body,
+            icon: '/icon.svg',
+            vibrate: [200, 100, 200],
+            tag: 'zentask-timer',
+            renotify: true
+          });
+          return;
+        }
+      }
+      new Notification(title, { body, icon: '/icon.svg' });
+    } catch (e) {
+      new Notification(title, { body, icon: '/icon.svg' });
+    }
+  };
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    // Create Web Worker for background timer
+    const workerCode = `
+      let intervalId = null;
+      let expectedEndTime = null;
 
+      self.onmessage = function(e) {
+        if (e.data.command === 'start') {
+          expectedEndTime = e.data.expectedEndTime;
+          if (intervalId) clearInterval(intervalId);
+          intervalId = setInterval(() => {
+            const now = Date.now();
+            const remaining = Math.max(0, Math.round((expectedEndTime - now) / 1000));
+            self.postMessage({ remaining });
+            if (remaining === 0) {
+              clearInterval(intervalId);
+            }
+          }, 1000);
+        } else if (e.data.command === 'stop') {
+          if (intervalId) clearInterval(intervalId);
+        }
+      };
+    `;
+    const blob = new Blob([workerCode], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(blob);
+    workerRef.current = new Worker(workerUrl);
+
+    return () => {
+      workerRef.current?.terminate();
+      URL.revokeObjectURL(workerUrl);
+    };
+  }, []);
+
+  useEffect(() => {
     if (isRunning && timeLeft > 0) {
       if (!expectedEndTimeRef.current) {
         expectedEndTimeRef.current = Date.now() + timeLeft * 1000;
       }
 
-      interval = setInterval(() => {
-        const now = Date.now();
-        const remaining = Math.max(0, Math.round((expectedEndTimeRef.current! - now) / 1000));
-
-        setTimeLeft((prev) => {
-          const secondsPassed = prev - remaining;
+      if (workerRef.current) {
+        workerRef.current.onmessage = (e) => {
+          const remaining = e.data.remaining;
           
-          if (secondsPassed > 0 && mode === 'work') {
-            selectedPendingTasksRef.current.forEach(t => {
-              pendingTimeUpdates.current[t.id] = (pendingTimeUpdates.current[t.id] || 0) + secondsPassed;
-            });
-            // Flush every 10 seconds
-            if (remaining % 10 === 0 || remaining === 0) {
-              flushTimeUpdates();
+          setTimeLeft((prev) => {
+            const secondsPassed = prev - remaining;
+            
+            if (secondsPassed > 0 && mode === 'work') {
+              selectedPendingTasksRef.current.forEach(t => {
+                pendingTimeUpdates.current[t.id] = (pendingTimeUpdates.current[t.id] || 0) + secondsPassed;
+              });
+              // Flush every 10 seconds
+              if (remaining % 10 === 0 || remaining === 0) {
+                flushTimeUpdates();
+              }
             }
-          }
 
-          if (remaining === 0) {
-            clearInterval(interval);
-            setIsRunning(false);
-            expectedEndTimeRef.current = null;
-            if (mode === 'work') flushTimeUpdates();
-            playAlertSound();
-            handleTimerComplete();
-          }
+            if (remaining === 0) {
+              workerRef.current?.postMessage({ command: 'stop' });
+              setIsRunning(false);
+              expectedEndTimeRef.current = null;
+              if (mode === 'work') flushTimeUpdates();
+              playAlertSound();
+              sendNotification(
+                mode === 'work' ? '¡Enfoque Terminado!' : '¡Descanso Terminado!',
+                mode === 'work' ? 'Es hora de tomar un descanso.' : 'Es hora de volver al trabajo.'
+              );
+              handleTimerComplete();
+            }
 
-          return remaining;
+            return remaining;
+          });
+        };
+
+        workerRef.current.postMessage({ 
+          command: 'start', 
+          expectedEndTime: expectedEndTimeRef.current 
         });
-      }, 1000);
+      }
     } else {
       expectedEndTimeRef.current = null;
+      workerRef.current?.postMessage({ command: 'stop' });
     }
 
-    return () => clearInterval(interval);
+    return () => {
+      workerRef.current?.postMessage({ command: 'stop' });
+    };
   }, [isRunning, mode]);
 
   const toggleTimer = () => {

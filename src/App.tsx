@@ -127,6 +127,18 @@ export default function App() {
     return saved ? JSON.parse(saved).pomodorosCompleted : 0;
   });
 
+  // Persist Timer State
+  useEffect(() => {
+    localStorage.setItem('pomodoroState', JSON.stringify({
+      mode,
+      timeLeft,
+      totalTime,
+      isRunning,
+      pomodorosCompleted,
+      lastUpdated: Date.now()
+    }));
+  }, [mode, timeLeft, totalTime, isRunning, pomodorosCompleted]);
+
   // Focus Logs State (for Discipline Metric)
   type FocusLog = {
     id: string;
@@ -1122,32 +1134,51 @@ export default function App() {
   };
 
   // Timer Logic
+  const expectedEndTimeRef = useRef<number | null>(null);
+
   useEffect(() => {
     let interval: NodeJS.Timeout;
+
     if (isRunning && timeLeft > 0) {
+      if (!expectedEndTimeRef.current) {
+        expectedEndTimeRef.current = Date.now() + timeLeft * 1000;
+      }
+
       interval = setInterval(() => {
+        const now = Date.now();
+        const remaining = Math.max(0, Math.round((expectedEndTimeRef.current! - now) / 1000));
+
         setTimeLeft((prev) => {
-          const newTime = prev - 1;
-          if (mode === 'work') {
+          const secondsPassed = prev - remaining;
+          
+          if (secondsPassed > 0 && mode === 'work') {
             selectedPendingTasksRef.current.forEach(t => {
-              pendingTimeUpdates.current[t.id] = (pendingTimeUpdates.current[t.id] || 0) + 1;
+              pendingTimeUpdates.current[t.id] = (pendingTimeUpdates.current[t.id] || 0) + secondsPassed;
             });
-            // Flush every 10 seconds to keep UI somewhat updated and not lose data
-            if (newTime % 10 === 0) {
+            // Flush every 10 seconds
+            if (remaining % 10 === 0 || remaining === 0) {
               flushTimeUpdates();
             }
           }
-          return newTime;
+
+          if (remaining === 0) {
+            clearInterval(interval);
+            setIsRunning(false);
+            expectedEndTimeRef.current = null;
+            if (mode === 'work') flushTimeUpdates();
+            playAlertSound();
+            handleTimerComplete();
+          }
+
+          return remaining;
         });
       }, 1000);
-    } else if (isRunning && timeLeft === 0) {
-      setIsRunning(false);
-      if (mode === 'work') flushTimeUpdates();
-      playAlertSound();
-      handleTimerComplete();
+    } else {
+      expectedEndTimeRef.current = null;
     }
+
     return () => clearInterval(interval);
-  }, [isRunning, timeLeft, mode]);
+  }, [isRunning, mode]);
 
   const toggleTimer = () => {
     if (isRunning) return; // Prevent pausing/stopping via this button
@@ -2122,13 +2153,13 @@ export default function App() {
                 <div className="text-center space-y-12 w-full max-w-2xl">
                   
                   {/* Timer */}
-                  <div className="text-[12rem] leading-none font-light tracking-tighter font-mono text-emerald-400/90 select-none">
+                  <div className="text-8xl sm:text-9xl md:text-[12rem] leading-none font-light tracking-tighter font-mono text-emerald-400/90 select-none">
                     {formatTime(timeLeft)}
                   </div>
                   
                   {/* Task Title */}
                   {selectedPendingTasks.length > 0 && (
-                    <div className="text-3xl font-medium text-neutral-400 max-w-3xl mx-auto leading-relaxed">
+                    <div className="text-xl sm:text-2xl md:text-3xl font-medium text-neutral-400 max-w-3xl mx-auto leading-relaxed">
                       {selectedPendingTasks[0].title}
                     </div>
                   )}

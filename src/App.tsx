@@ -65,6 +65,27 @@ const PREDEFINED_COLORS = [
 ];
 
 export default function App() {
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
+
+  const handleInstallApp = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setDeferredPrompt(null);
+      }
+    }
+  };
+
   const [activeTab, setActiveTab] = useState<'inicio' | 'tareas' | 'ideas' | 'historial' | 'recordatorios' | 'medicacion' | 'estadisticas'>('inicio');
   const [statsPeriod, setStatsPeriod] = useState<'today' | 'week' | 'month' | 'year'>('week');
   
@@ -2072,6 +2093,27 @@ export default function App() {
 
       <main className="flex-1 p-5 overflow-y-auto flex flex-col items-center max-w-md mx-auto w-full pb-24">
         
+        {/* PWA Install Banner */}
+        {deferredPrompt && (
+          <div className="w-full bg-emerald-500/20 border border-emerald-500/50 rounded-2xl p-4 mb-6 flex items-center justify-between shadow-lg">
+            <div className="flex items-center gap-3">
+              <div className="bg-emerald-500/20 p-2 rounded-full">
+                <ArrowRight size={20} className="text-emerald-400" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-emerald-400 text-sm">Instalar ZenTask</h4>
+                <p className="text-xs text-neutral-400">Añade la app a tu pantalla de inicio</p>
+              </div>
+            </div>
+            <button 
+              onClick={handleInstallApp}
+              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 text-sm font-semibold rounded-xl transition-colors"
+            >
+              Instalar
+            </button>
+          </div>
+        )}
+
         {activeTab === 'inicio' && (
           <>
             {/* Zen Mode Overlay - Only active when running and Zen Mode is on */}

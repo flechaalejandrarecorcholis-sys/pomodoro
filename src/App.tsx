@@ -1792,7 +1792,7 @@ export default function App() {
 
       {/* Add Idea Modal Overlay */}
       {isAddingIdea && (
-        <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-6">
+        <div className="fixed inset-0 z-[60] bg-neutral-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-6">
           <div className="bg-neutral-800 p-6 rounded-3xl w-full max-w-sm shadow-2xl border border-neutral-700">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -2144,23 +2144,23 @@ export default function App() {
               }}
             >
               <div className="w-full bg-neutral-800 rounded-[20px] p-8 flex flex-col items-center justify-center">
-                <div className="flex items-center justify-center gap-6 mb-4">
+                <div className="flex items-center justify-center gap-6 mb-4 w-full">
                   <button 
                     onClick={handleMinus}
                     disabled={isRunning || timeLeft <= 5 * 60}
-                    className="p-3 rounded-full bg-neutral-700 hover:bg-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="p-3 rounded-full bg-neutral-700 hover:bg-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
                   >
                     <Minus size={24} />
                   </button>
                   
-                  <div className={`text-7xl font-light tracking-tighter font-mono ${!isWork && 'text-blue-400'}`}>
+                  <div className={`text-7xl sm:text-8xl font-light tracking-tighter font-mono flex-1 text-center ${!isWork && 'text-blue-400'}`}>
                     {formatTime(timeLeft)}
                   </div>
                   
                   <button 
                     onClick={handlePlus}
                     disabled={isRunning}
-                    className="p-3 rounded-full bg-neutral-700 hover:bg-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="p-3 rounded-full bg-neutral-700 hover:bg-neutral-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
                   >
                     <Plus size={24} />
                   </button>

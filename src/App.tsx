@@ -739,6 +739,18 @@ export default function App() {
     e.preventDefault();
     if (!newTaskTitle.trim() || !newTaskTagId) return;
 
+    if (editingTaskId) {
+      const editedTask = tasks.find(t => t.id === editingTaskId);
+      if (editedTask && editedTask.selected && mode === 'work' && !isRunning) {
+        const newTasks = tasks.map(t => t.id === editingTaskId ? { ...t, estimation: newTaskEstimation } : t);
+        const newSelectedPending = newTasks.filter(t => t.selected && !t.completed);
+        const newHasSelected = newSelectedPending.length > 0;
+        const newMax = newHasSelected ? Math.max(...newSelectedPending.map(t => t.estimation || 25)) : 25;
+        setTimeLeft(newMax * 60);
+        setTotalTime(newMax * 60);
+      }
+    }
+
     if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
       // Fallback local si Firebase no está configurado
       if (editingTaskId) {
@@ -958,8 +970,18 @@ export default function App() {
   };
 
   const toggleTaskSelection = async (id: string, currentSelected: boolean) => {
+    const newTasks = tasks.map(t => t.id === id ? { ...t, selected: !currentSelected } : t);
+    const newSelectedPending = newTasks.filter(t => t.selected && !t.completed);
+    
+    if (mode === 'work' && !isRunning) {
+      const newHasSelected = newSelectedPending.length > 0;
+      const newMax = newHasSelected ? Math.max(...newSelectedPending.map(t => t.estimation || 25)) : 25;
+      setTimeLeft(newMax * 60);
+      setTotalTime(newMax * 60);
+    }
+
     if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
-      setTasks(tasks.map(t => t.id === id ? { ...t, selected: !t.selected } : t));
+      setTasks(newTasks);
       return;
     }
 
@@ -981,6 +1003,12 @@ export default function App() {
   const selectedPendingTasks = tasks.filter(t => t.selected && !t.completed);
   const selectedPendingTasksRef = useRef(selectedPendingTasks);
   const pendingTimeUpdates = useRef<Record<string, number>>({});
+
+  const hasSelectedTasks = selectedPendingTasks.length > 0;
+  const maxEstimation = useMemo(() => {
+    if (!hasSelectedTasks) return 25;
+    return Math.max(...selectedPendingTasks.map(t => t.estimation || 25));
+  }, [selectedPendingTasks, hasSelectedTasks]);
 
   useEffect(() => {
     selectedPendingTasksRef.current = selectedPendingTasks;
@@ -1154,8 +1182,9 @@ export default function App() {
     } else {
       // Break finished, back to work
       setMode('work');
-      setTimeLeft(25 * 60);
-      setTotalTime(25 * 60);
+      const newTime = hasSelectedTasks ? maxEstimation * 60 : 25 * 60;
+      setTimeLeft(newTime);
+      setTotalTime(newTime);
       // setIsRunning(true); // NO iniciar automáticamente el trabajo
     }
   };
@@ -1272,8 +1301,9 @@ export default function App() {
     setIsRunning(false);
     if (mode === 'work') {
       flushTimeUpdates();
-      setTimeLeft(25 * 60);
-      setTotalTime(25 * 60);
+      const newTime = hasSelectedTasks ? maxEstimation * 60 : 25 * 60;
+      setTimeLeft(newTime);
+      setTotalTime(newTime);
     } else if (mode === 'shortBreak') {
       setTimeLeft(5 * 60);
       setTotalTime(5 * 60);
@@ -1281,6 +1311,14 @@ export default function App() {
       setTimeLeft(15 * 60);
       setTotalTime(15 * 60);
     }
+  };
+
+  const skipBreak = () => {
+    setIsRunning(false);
+    setMode('work');
+    const newTime = hasSelectedTasks ? maxEstimation * 60 : 25 * 60;
+    setTimeLeft(newTime);
+    setTotalTime(newTime);
   };
 
   const formatTime = (seconds: number) => {
@@ -1768,6 +1806,16 @@ export default function App() {
                   <button 
                     type="button"
                     onClick={async () => {
+                      const deletedTask = tasks.find(t => t.id === editingTaskId);
+                      if (deletedTask && deletedTask.selected && mode === 'work' && !isRunning) {
+                        const newTasks = tasks.filter(t => t.id !== editingTaskId);
+                        const newSelectedPending = newTasks.filter(t => t.selected && !t.completed);
+                        const newHasSelected = newSelectedPending.length > 0;
+                        const newMax = newHasSelected ? Math.max(...newSelectedPending.map(t => t.estimation || 25)) : 25;
+                        setTimeLeft(newMax * 60);
+                        setTotalTime(newMax * 60);
+                      }
+
                       if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
                         setTasks(tasks.filter(t => t.id !== editingTaskId));
                       } else {
@@ -2175,6 +2223,15 @@ export default function App() {
                 <p className={`text-sm font-medium uppercase tracking-widest ${isWork ? 'text-neutral-400' : 'text-blue-400'}`}>
                   {mode === 'work' ? 'Enfoque' : mode === 'shortBreak' ? 'Descanso Corto' : 'Descanso Largo'}
                 </p>
+                {!isWork && (
+                  <button
+                    onClick={skipBreak}
+                    className="mt-4 px-4 py-1.5 bg-neutral-700/50 hover:bg-neutral-600 text-neutral-300 text-xs font-medium rounded-full transition-colors flex items-center gap-1"
+                  >
+                    Omitir Descanso
+                    <ArrowRight size={14} />
+                  </button>
+                )}
               </div>
             </div>
 

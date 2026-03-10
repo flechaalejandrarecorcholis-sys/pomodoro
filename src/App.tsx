@@ -64,6 +64,13 @@ const PREDEFINED_COLORS = [
   'bg-cyan-500', 'bg-fuchsia-500', 'bg-lime-500', 'bg-orange-500', 'bg-indigo-500'
 ];
 
+const getLocalDateString = (date: Date = new Date()) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   
@@ -195,7 +202,7 @@ export default function App() {
   const [tempGoal, setTempGoal] = useState(dailyGoalMinutes.toString());
 
   const focusedMinutesToday = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     const todayLogs = focusLogs.filter(log => log.date.startsWith(today) && log.status === 'completed');
     const totalSeconds = todayLogs.reduce((acc, log) => acc + log.duration, 0);
     return Math.floor(totalSeconds / 60);
@@ -214,9 +221,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     if (focusedMinutesToday >= dailyGoalMinutes && lastActiveDate !== today) {
-      const newStreak = (lastActiveDate === new Date(Date.now() - 86400000).toISOString().split('T')[0]) ? streak + 1 : 1;
+      const newStreak = (lastActiveDate === getLocalDateString(new Date(Date.now() - 86400000))) ? streak + 1 : 1;
       setStreak(newStreak);
       setLastActiveDate(today);
       localStorage.setItem('pomodoroStreak', JSON.stringify({ streak: newStreak, lastActiveDate: today }));
@@ -228,7 +235,7 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isAddingTask, setIsAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskDate, setNewTaskDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newTaskDate, setNewTaskDate] = useState(getLocalDateString());
   const [newTaskEstimation, setNewTaskEstimation] = useState(25);
   const [newTaskTagId, setNewTaskTagId] = useState<string>('');
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -252,7 +259,7 @@ export default function App() {
   const [editingReminderId, setEditingReminderId] = useState<string | null>(null);
   const [newReminderTitle, setNewReminderTitle] = useState('');
   const [newReminderDetail, setNewReminderDetail] = useState('');
-  const [newReminderDate, setNewReminderDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newReminderDate, setNewReminderDate] = useState(getLocalDateString());
   const [newReminderTime, setNewReminderTime] = useState('');
 
   // Medication State
@@ -280,7 +287,7 @@ export default function App() {
   useEffect(() => {
     if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
       console.warn("Firebase no está configurado. Usando datos locales.");
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       setTasks([
         { id: '1', title: 'Configurar Firebase Firestore (Local)', completed: false, selected: true, date: today, estimation: 1, tagId: 't1' },
         { id: '2', title: 'Implementar lógica del temporizador (Local)', completed: false, selected: false, date: today, estimation: 2, tagId: 't2' }
@@ -397,7 +404,7 @@ export default function App() {
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
-      const currentDate = now.toISOString().split('T')[0];
+      const currentDate = getLocalDateString(now);
       const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
       const currentDay = now.getDay(); // 0-6
 
@@ -555,12 +562,12 @@ export default function App() {
   };
 
   const handleTakeMedication = async (med: Medication, scheduledTime: string) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     
     // Calculate tomorrow for reminders
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    const tomorrowStr = getLocalDateString(tomorrow);
 
     const logData = {
       medicationId: med.id,
@@ -613,7 +620,7 @@ export default function App() {
   const handleSkipMedication = async () => {
     if (!isSkippingMed) return;
     const { med, time } = isSkippingMed;
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     
     const logData = {
       medicationId: med.id,
@@ -641,7 +648,7 @@ export default function App() {
   const getTodayMedications = () => {
     const today = new Date();
     const dayOfWeek = today.getDay();
-    const dateStr = today.toISOString().split('T')[0];
+    const dateStr = getLocalDateString(today);
 
     const tasks: { med: Medication, time: string, status: 'pending' | 'taken' | 'skipped' }[] = [];
 
@@ -672,7 +679,7 @@ export default function App() {
   };
 
   const getOverdueText = (taskDate: string) => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = getLocalDateString();
     if (taskDate >= todayStr) return '';
     const today = new Date(todayStr);
     const tDate = new Date(taskDate);
@@ -785,7 +792,7 @@ export default function App() {
 
   const resetTaskForm = () => {
     setNewTaskTitle('');
-    setNewTaskDate(new Date().toISOString().split('T')[0]);
+    setNewTaskDate(getLocalDateString());
     setNewTaskEstimation(25);
     setNewTaskTagId('');
     setIsAddingTask(false);
@@ -796,7 +803,7 @@ export default function App() {
   const resetReminderForm = () => {
     setNewReminderTitle('');
     setNewReminderDetail('');
-    setNewReminderDate(new Date().toISOString().split('T')[0]);
+    setNewReminderDate(getLocalDateString());
     setNewReminderTime('');
     setIsAddingReminder(false);
     setEditingReminderId(null);
@@ -807,7 +814,7 @@ export default function App() {
     e.preventDefault();
     if (!newReminderTitle.trim() || !newReminderDate || !newReminderTime) return;
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     const now = new Date();
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
@@ -926,7 +933,7 @@ export default function App() {
 
     const now = new Date();
     now.setMinutes(now.getMinutes() + minutes);
-    const newDate = now.toISOString().split('T')[0];
+    const newDate = getLocalDateString(now);
     const newTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     
     if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
@@ -945,7 +952,7 @@ export default function App() {
     setConvertingToReminderIdeaId(idea.id);
     setNewReminderTitle(idea.text);
     setNewReminderDetail('');
-    setNewReminderDate(new Date().toISOString().split('T')[0]);
+    setNewReminderDate(getLocalDateString());
     setNewReminderTime('');
     setIsAddingReminder(true);
   };
@@ -1173,7 +1180,7 @@ export default function App() {
     const currentTask = tasksToReview[reviewIndex];
     
     if (completed) {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getLocalDateString();
       if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
         setTasks(prevTasks => prevTasks.map(t => t.id === currentTask.id ? { ...t, completed: true, selected: false, completedAt: todayStr } : t));
       } else {
@@ -1231,7 +1238,7 @@ export default function App() {
 
   const resetTimer = (completedTask: boolean = false) => {
     if (completedTask) {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getLocalDateString();
       
       if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
         setTasks(prevTasks => prevTasks.map(t => 
@@ -1287,7 +1294,7 @@ export default function App() {
 
   const getGroupedTasks = () => {
     const filteredTasks = tasks.filter(t => {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getLocalDateString();
       if (t.completed) return false;
       return tasksView === 'all' ? t.date <= today : t.date > today;
     });
@@ -1333,7 +1340,7 @@ export default function App() {
     for (let i = 0; i < 7; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = getLocalDateString(d);
       
       let displayDate = '';
       if (i === 0) displayDate = 'Hoy';
@@ -1390,7 +1397,7 @@ export default function App() {
       startDate.setFullYear(now.getFullYear() - 1);
     }
 
-    const startDateStr = startDate.toISOString().split('T')[0];
+    const startDateStr = getLocalDateString(startDate);
 
     // Filter tasks based on period
     const periodTasks = tasks.filter(t => {
@@ -1413,7 +1420,7 @@ export default function App() {
       // Initialize dates
       let currentDate = new Date(startDate);
       while (currentDate <= now) {
-        const dateStr = currentDate.toISOString().split('T')[0];
+        const dateStr = getLocalDateString(currentDate);
         // Format date for display
         let displayDate = dateStr;
         if (statsPeriod === 'week') {
@@ -1728,7 +1735,7 @@ export default function App() {
                   <input
                     type="date"
                     value={newTaskDate}
-                    min={new Date().toISOString().split('T')[0]}
+                    min={getLocalDateString()}
                     onChange={(e) => setNewTaskDate(e.target.value)}
                     className="w-full bg-neutral-900 border border-neutral-700 rounded-xl p-4 text-neutral-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all [color-scheme:dark]"
                   />
@@ -1867,7 +1874,7 @@ export default function App() {
                     type="date" 
                     value={newReminderDate}
                     onChange={(e) => setNewReminderDate(e.target.value)}
-                    min={new Date().toISOString().split('T')[0]}
+                    min={getLocalDateString()}
                     className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3 text-neutral-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
                     required
                   />
@@ -2301,7 +2308,7 @@ export default function App() {
                 {tasks
                   .filter(t => !t.completed)
                   .filter(t => {
-                    const today = new Date().toISOString().split('T')[0];
+                    const today = getLocalDateString();
                     return homeView === 'today' ? t.date === today : t.date < today;
                   })
                   .sort((a, b) => {
@@ -2311,7 +2318,7 @@ export default function App() {
                   .slice(0, 5) // Max 5 tasks
                   .map(task => {
                     const tag = tags.find(t => t.id === task.tagId);
-                    const isOverdue = task.date < new Date().toISOString().split('T')[0];
+                    const isOverdue = task.date < getLocalDateString();
                     return (
                       <div 
                         key={task.id}
@@ -2350,7 +2357,7 @@ export default function App() {
                     );
                   })}
                 
-                {tasks.filter(t => !t.completed && (homeView === 'today' ? t.date === new Date().toISOString().split('T')[0] : t.date < new Date().toISOString().split('T')[0])).length === 0 && (
+                {tasks.filter(t => !t.completed && (homeView === 'today' ? t.date === getLocalDateString() : t.date < getLocalDateString())).length === 0 && (
                   <div className="text-center p-8 border border-dashed border-neutral-700 rounded-2xl text-neutral-500">
                     {homeView === 'today' ? 'No hay tareas para hoy. ¡A descansar!' : '¡Genial! No tienes tareas atrasadas.'}
                   </div>
@@ -2410,7 +2417,7 @@ export default function App() {
                 )}
 
                 {/* Other Reminders */}
-                {reminders.filter(r => !r.completed && r.date === new Date().toISOString().split('T')[0]).length > 0 && (
+                {reminders.filter(r => !r.completed && r.date === getLocalDateString()).length > 0 && (
                   <div>
                     <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider mb-4 flex items-center gap-2">
                       <Bell size={16} className="text-emerald-400" />
@@ -2418,7 +2425,7 @@ export default function App() {
                     </h3>
                     <div className="space-y-3">
                       {reminders
-                        .filter(r => !r.completed && r.date === new Date().toISOString().split('T')[0])
+                        .filter(r => !r.completed && r.date === getLocalDateString())
                         .sort((a, b) => a.time.localeCompare(b.time))
                         .map(reminder => (
                           <div key={reminder.id} className="flex items-center justify-between p-4 bg-neutral-800/30 rounded-2xl border border-neutral-800">
@@ -2499,8 +2506,8 @@ export default function App() {
                     {isExpanded && (
                       <div className="p-2 space-y-2 bg-neutral-900/20">
                         {tasks.map(task => {
-                          const isOverdue = task.date < new Date().toISOString().split('T')[0];
-                          const isToday = task.date === new Date().toISOString().split('T')[0];
+                          const isOverdue = task.date < getLocalDateString();
+                          const isToday = task.date === getLocalDateString();
                           return (
                             <div key={task.id} className="flex items-center justify-between p-3 bg-neutral-800/50 rounded-xl border border-neutral-800/50 group">
                               <div className="flex-1 flex flex-col min-w-0 mr-3">
@@ -2690,9 +2697,9 @@ export default function App() {
                         <p className="text-xs text-neutral-500 mt-1 line-clamp-2">{reminder.detail}</p>
                       )}
                       <div className="flex items-center gap-3 mt-3">
-                        <span className={`text-[10px] flex items-center gap-1 ${reminder.date < new Date().toISOString().split('T')[0] ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        <span className={`text-[10px] flex items-center gap-1 ${reminder.date < getLocalDateString() ? 'text-rose-400' : 'text-emerald-400'}`}>
                           <Calendar size={10} /> 
-                          {reminder.date === new Date().toISOString().split('T')[0] ? 'Hoy' : reminder.date}
+                          {reminder.date === getLocalDateString() ? 'Hoy' : reminder.date}
                         </span>
                         <span className="text-[10px] text-neutral-400 flex items-center gap-1">
                           <Clock size={10} /> {reminder.time}
@@ -2889,7 +2896,7 @@ export default function App() {
                       itemStyle={{ color: '#e5e5e5' }}
                       cursor={{ fill: '#404040', opacity: 0.4 }}
                     />
-                    <Bar dataKey="minutos" fill="#10b981" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="minutos" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={40} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -3002,9 +3009,9 @@ export default function App() {
             {/* Discipline Metric */}
             <div className="bg-neutral-800 p-6 rounded-3xl border border-neutral-700 mb-6">
               <h3 className="text-sm font-semibold text-neutral-300 mb-4">Disciplina de Enfoque</h3>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="relative w-20 h-20 flex items-center justify-center">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+                <div className="flex items-center gap-4 w-full sm:w-auto">
+                  <div className="relative w-20 h-20 flex items-center justify-center shrink-0">
                     <svg className="w-full h-full transform -rotate-90">
                       <circle
                         cx="40"
@@ -3035,12 +3042,12 @@ export default function App() {
                     <p className="text-xs text-neutral-500">Sesiones completadas vs. iniciadas</p>
                   </div>
                 </div>
-                <div className="text-right space-y-1">
-                  <div className="flex items-center justify-end gap-2">
+                <div className="flex flex-row sm:flex-col justify-around sm:justify-end items-center sm:items-end w-full sm:w-auto gap-4 sm:gap-1 bg-neutral-900/50 sm:bg-transparent p-3 sm:p-0 rounded-xl">
+                  <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
                     <span className="text-xs text-neutral-400">{stats.completedSessions} Completadas</span>
                   </div>
-                  <div className="flex items-center justify-end gap-2">
+                  <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full bg-rose-500"></div>
                     <span className="text-xs text-neutral-400">{stats.abandonedSessions} Abandonadas</span>
                   </div>

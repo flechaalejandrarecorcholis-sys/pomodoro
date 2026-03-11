@@ -4,13 +4,21 @@
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Play, Square, Plus, Minus, RotateCcw, Bell, CheckSquare, Lightbulb, Check, X, Tags, Calendar, Clock, ChevronRight, ChevronDown, ChevronUp, Trash2, ArrowRight, Pencil, History, BellRing, AlignLeft, Pill, AlertTriangle, BarChart2, PieChart, Lock, Maximize2, Headphones, Volume2, Volume1 } from 'lucide-react';
+import { Play, Square, Plus, Minus, RotateCcw, Bell, CheckSquare, Lightbulb, Check, X, Tags, Calendar, Clock, ChevronRight, ChevronDown, ChevronUp, Trash2, ArrowRight, Pencil, History, BellRing, AlignLeft, Pill, AlertTriangle, BarChart2, PieChart, Lock, Maximize2, Headphones, Volume2, Volume1, Folder } from 'lucide-react';
 import { collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, increment, where } from 'firebase/firestore';
 import { db } from './firebase';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart as RePieChart, Pie, Cell, LineChart, Line } from 'recharts';
 
 type Tag = { id: string; name: string; color: string };
 type Idea = { id: string; text: string; createdAt?: any };
+type Project = {
+  id: string;
+  title: string;
+  description: string;
+  color: string;
+  createdAt?: any;
+};
+
 type Task = { 
   id: string; 
   title: string; 
@@ -22,6 +30,9 @@ type Task = {
   timeSpent?: number; // Segundos
   completedAt?: string; // YYYY-MM-DD
   tagId?: string;
+  projectId?: string;
+  phase?: string;
+  isBacklog?: boolean;
 };
 
 type Reminder = {
@@ -93,7 +104,7 @@ export default function App() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<'inicio' | 'tareas' | 'ideas' | 'historial' | 'recordatorios' | 'medicacion' | 'estadisticas'>('inicio');
+  const [activeTab, setActiveTab] = useState<'inicio' | 'tareas' | 'ideas' | 'historial' | 'recordatorios' | 'medicacion' | 'estadisticas' | 'proyectos'>('inicio');
   const [statsPeriod, setStatsPeriod] = useState<'today' | 'week' | 'month' | 'year'>('week');
   
   // Timer State
@@ -238,16 +249,32 @@ export default function App() {
   const [newTaskDate, setNewTaskDate] = useState(getLocalDateString());
   const [newTaskEstimation, setNewTaskEstimation] = useState(25);
   const [newTaskTagId, setNewTaskTagId] = useState<string>('');
+  const [newTaskProjectId, setNewTaskProjectId] = useState<string>('');
+  const [newTaskIsBacklog, setNewTaskIsBacklog] = useState<boolean>(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [isSubmittingTask, setIsSubmittingTask] = useState(false);
   
   // Tags State
   const [tags, setTags] = useState<Tag[]>([]);
   const [isManagingTags, setIsManagingTags] = useState(false);
+  const [isSubmittingTag, setIsSubmittingTag] = useState(false);
   const [newTagName, setNewTagName] = useState('');
+
+  // Projects State
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [isAddingProject, setIsAddingProject] = useState(false);
+  const [isSubmittingProject, setIsSubmittingProject] = useState(false);
+  const [newProjectTitle, setNewProjectTitle] = useState('');
+  const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [newProjectColor, setNewProjectColor] = useState(PREDEFINED_COLORS[0]);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [newTaskPhase, setNewTaskPhase] = useState('');
 
   // Ideas State
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [isAddingIdea, setIsAddingIdea] = useState(false);
+  const [isSubmittingIdea, setIsSubmittingIdea] = useState(false);
   const [newIdeaText, setNewIdeaText] = useState('');
   const [convertingIdeaId, setConvertingIdeaId] = useState<string | null>(null);
   const [convertingToReminderIdeaId, setConvertingToReminderIdeaId] = useState<string | null>(null);
@@ -256,6 +283,7 @@ export default function App() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [activeReminderQueue, setActiveReminderQueue] = useState<Reminder[]>([]);
   const [isAddingReminder, setIsAddingReminder] = useState(false);
+  const [isSubmittingReminder, setIsSubmittingReminder] = useState(false);
   const [editingReminderId, setEditingReminderId] = useState<string | null>(null);
   const [newReminderTitle, setNewReminderTitle] = useState('');
   const [newReminderDetail, setNewReminderDetail] = useState('');
@@ -267,6 +295,8 @@ export default function App() {
   const [medicationLogs, setMedicationLogs] = useState<MedicationLog[]>([]);
   const triggeredMedicationsRef = useRef<Set<string>>(new Set());
   const [isAddingMedication, setIsAddingMedication] = useState(false);
+  const [isSubmittingMedication, setIsSubmittingMedication] = useState(false);
+  const isSubmittingRef = useRef(false);
   const [editingMedicationId, setEditingMedicationId] = useState<string | null>(null);
   const [newMedName, setNewMedName] = useState('');
   const [newMedDosage, setNewMedDosage] = useState('');
@@ -359,6 +389,16 @@ export default function App() {
       setMedicationLogs(logsData);
     });
 
+    // Fetch Projects
+    const qProjects = query(collection(db, 'projects'), orderBy('createdAt', 'desc'));
+    const unsubscribeProjects = onSnapshot(qProjects, (snapshot) => {
+      const projectsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Project[];
+      setProjects(projectsData);
+    });
+
     return () => {
       unsubscribeTasks();
       unsubscribeTags();
@@ -366,6 +406,7 @@ export default function App() {
       unsubscribeReminders();
       unsubscribeMeds();
       unsubscribeMedLogs();
+      unsubscribeProjects();
     };
   }, []);
 
@@ -468,16 +509,18 @@ export default function App() {
 
   const handleAddIdea = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newIdeaText.trim()) return;
+    if (!newIdeaText.trim() || isSubmittingIdea || isSubmittingRef.current) return;
 
-    if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
-      setIdeas([{ id: Date.now().toString(), text: newIdeaText }, ...ideas]);
-      setNewIdeaText('');
-      setIsAddingIdea(false);
-      return;
-    }
-
+    isSubmittingRef.current = true;
+    setIsSubmittingIdea(true);
     try {
+      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+        setIdeas([{ id: Date.now().toString(), text: newIdeaText }, ...ideas]);
+        setNewIdeaText('');
+        setIsAddingIdea(false);
+        return;
+      }
+
       await addDoc(collection(db, 'ideas'), {
         text: newIdeaText,
         createdAt: new Date()
@@ -486,6 +529,9 @@ export default function App() {
       setIsAddingIdea(false);
     } catch (error) {
       console.error("Error adding idea: ", error);
+    } finally {
+      setIsSubmittingIdea(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -503,8 +549,10 @@ export default function App() {
 
   const handleSaveMedication = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMedName.trim()) return;
+    if (!newMedName.trim() || isSubmittingMedication || isSubmittingRef.current) return;
 
+    isSubmittingRef.current = true;
+    setIsSubmittingMedication(true);
     const medData = {
       name: newMedName,
       dosage: newMedDosage,
@@ -516,24 +564,27 @@ export default function App() {
       createdAt: new Date()
     };
 
-    if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
-      if (editingMedicationId) {
-        setMedications(meds => meds.map(m => m.id === editingMedicationId ? { ...m, ...medData, id: m.id } : m));
+    try {
+      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+        if (editingMedicationId) {
+          setMedications(meds => meds.map(m => m.id === editingMedicationId ? { ...m, ...medData, id: m.id } : m));
+        } else {
+          setMedications([...medications, { ...medData, id: Date.now().toString() }]);
+        }
       } else {
-        setMedications([...medications, { ...medData, id: Date.now().toString() }]);
-      }
-    } else {
-      try {
         if (editingMedicationId) {
           await updateDoc(doc(db, 'medications', editingMedicationId), medData);
         } else {
           await addDoc(collection(db, 'medications'), medData);
         }
-      } catch (error) {
-        console.error("Error saving medication: ", error);
       }
+      resetMedForm();
+    } catch (error) {
+      console.error("Error saving medication: ", error);
+    } finally {
+      setIsSubmittingMedication(false);
+      isSubmittingRef.current = false;
     }
-    resetMedForm();
   };
 
   const handleDeleteMedication = async (id: string) => {
@@ -688,30 +739,43 @@ export default function App() {
     return diffDays === 1 ? 'Atrasada 1 día' : `Atrasada ${diffDays} días`;
   };
 
+  const openEditProject = (project: Project) => {
+    setNewProjectTitle(project.title);
+    setNewProjectDescription(project.description);
+    setNewProjectColor(project.color);
+    setEditingProjectId(project.id);
+    setIsAddingProject(true);
+  };
+
   const openEditTask = (task: Task) => {
     setNewTaskTitle(task.title);
     setNewTaskDate(task.date);
     setNewTaskEstimation(task.estimation);
     setNewTaskTagId(task.tagId || '');
+    setNewTaskProjectId(task.projectId || '');
+    setNewTaskPhase(task.phase || '');
+    setNewTaskIsBacklog(task.isBacklog || false);
     setEditingTaskId(task.id);
     setIsAddingTask(true);
   };
 
   const handleAddTag = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTagName.trim() || tags.length >= 10) return;
+    if (!newTagName.trim() || tags.length >= 10 || isSubmittingTag || isSubmittingRef.current) return;
 
+    isSubmittingRef.current = true;
+    setIsSubmittingTag(true);
     // Find first available color
     const usedColors = tags.map(t => t.color);
     const availableColor = PREDEFINED_COLORS.find(c => !usedColors.includes(c)) || PREDEFINED_COLORS[0];
 
-    if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
-      setTags([...tags, { id: Date.now().toString(), name: newTagName, color: availableColor }]);
-      setNewTagName('');
-      return;
-    }
-
     try {
+      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+        setTags([...tags, { id: Date.now().toString(), name: newTagName, color: availableColor }]);
+        setNewTagName('');
+        return;
+      }
+
       await addDoc(collection(db, 'tags'), {
         name: newTagName,
         color: availableColor,
@@ -720,6 +784,9 @@ export default function App() {
       setNewTagName('');
     } catch (error) {
       console.error("Error adding tag: ", error);
+    } finally {
+      setIsSubmittingTag(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -737,55 +804,47 @@ export default function App() {
 
   const handleAddTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTaskTitle.trim() || !newTaskTagId) return;
+    if (!newTaskTitle.trim() || isSubmittingTask || isSubmittingRef.current) return;
+    if (!newTaskProjectId && !newTaskTagId) return; // Require either project or tag
 
-    if (editingTaskId) {
-      const editedTask = tasks.find(t => t.id === editingTaskId);
-      if (editedTask && editedTask.selected && mode === 'work' && !isRunning) {
-        const newTasks = tasks.map(t => t.id === editingTaskId ? { ...t, estimation: newTaskEstimation } : t);
-        const newSelectedPending = newTasks.filter(t => t.selected && !t.completed);
-        const newHasSelected = newSelectedPending.length > 0;
-        const newMax = newHasSelected ? Math.max(...newSelectedPending.map(t => t.estimation || 25)) : 25;
-        setTimeLeft(newMax * 60);
-        setTotalTime(newMax * 60);
-      }
-    }
-
-    if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
-      // Fallback local si Firebase no está configurado
-      if (editingTaskId) {
-        setTasks(tasks.map(t => t.id === editingTaskId ? { ...t, title: newTaskTitle, date: newTaskDate, estimation: newTaskEstimation, tagId: newTaskTagId } : t));
-      } else {
-        setTasks([{ 
-          id: Date.now().toString(), 
-          title: newTaskTitle, 
-          completed: false, 
-          selected: false,
-          date: newTaskDate,
-          estimation: newTaskEstimation,
-          tagId: newTaskTagId
-        }, ...tasks]);
-      }
-      resetTaskForm();
-      return;
-    }
-
+    isSubmittingRef.current = true;
+    setIsSubmittingTask(true);
     try {
+      const taskData: any = {
+        title: newTaskTitle,
+        date: newTaskDate,
+        estimation: newTaskEstimation,
+      };
+      if (newTaskTagId) taskData.tagId = newTaskTagId;
+      if (newTaskProjectId) {
+        taskData.projectId = newTaskProjectId;
+        taskData.phase = newTaskPhase;
+        taskData.isBacklog = newTaskIsBacklog;
+      }
+
+      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+        // Fallback local si Firebase no está configurado
+        if (editingTaskId) {
+          setTasks(tasks.map(t => t.id === editingTaskId ? { ...t, ...taskData } : t));
+        } else {
+          setTasks([{ 
+            id: Date.now().toString(), 
+            completed: false, 
+            selected: false,
+            ...taskData
+          }, ...tasks]);
+        }
+        resetTaskForm();
+        return;
+      }
+
       if (editingTaskId) {
-        await updateDoc(doc(db, 'tasks', editingTaskId), {
-          title: newTaskTitle,
-          date: newTaskDate,
-          estimation: newTaskEstimation,
-          tagId: newTaskTagId
-        });
+        await updateDoc(doc(db, 'tasks', editingTaskId), taskData);
       } else {
         await addDoc(collection(db, 'tasks'), {
-          title: newTaskTitle,
+          ...taskData,
           completed: false,
           selected: false,
-          date: newTaskDate,
-          estimation: newTaskEstimation,
-          tagId: newTaskTagId,
           createdAt: new Date()
         });
         
@@ -799,6 +858,9 @@ export default function App() {
     } catch (error) {
       console.error("Error saving task: ", error);
       alert("Error al guardar la tarea. Verifica la consola.");
+    } finally {
+      setIsSubmittingTask(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -807,6 +869,9 @@ export default function App() {
     setNewTaskDate(getLocalDateString());
     setNewTaskEstimation(25);
     setNewTaskTagId('');
+    setNewTaskProjectId('');
+    setNewTaskPhase('');
+    setNewTaskIsBacklog(false);
     setIsAddingTask(false);
     setConvertingIdeaId(null);
     setEditingTaskId(null);
@@ -824,7 +889,7 @@ export default function App() {
 
   const handleSaveReminder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newReminderTitle.trim() || !newReminderDate || !newReminderTime) return;
+    if (!newReminderTitle.trim() || !newReminderDate || !newReminderTime || isSubmittingReminder || isSubmittingRef.current) return;
 
     const today = getLocalDateString();
     const now = new Date();
@@ -835,6 +900,8 @@ export default function App() {
       return;
     }
 
+    isSubmittingRef.current = true;
+    setIsSubmittingReminder(true);
     try {
       if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
         if (editingReminderId) {
@@ -877,6 +944,9 @@ export default function App() {
     } catch (error) {
       console.error("Error saving reminder: ", error);
       alert("Error al guardar el recordatorio.");
+    } finally {
+      setIsSubmittingReminder(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -971,15 +1041,7 @@ export default function App() {
 
   const toggleTaskSelection = async (id: string, currentSelected: boolean) => {
     const newTasks = tasks.map(t => t.id === id ? { ...t, selected: !currentSelected } : t);
-    const newSelectedPending = newTasks.filter(t => t.selected && !t.completed);
     
-    if (mode === 'work' && !isRunning) {
-      const newHasSelected = newSelectedPending.length > 0;
-      const newMax = newHasSelected ? Math.max(...newSelectedPending.map(t => t.estimation || 25)) : 25;
-      setTimeLeft(newMax * 60);
-      setTotalTime(newMax * 60);
-    }
-
     if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
       setTasks(newTasks);
       return;
@@ -1005,10 +1067,17 @@ export default function App() {
   const pendingTimeUpdates = useRef<Record<string, number>>({});
 
   const hasSelectedTasks = selectedPendingTasks.length > 0;
-  const maxEstimation = useMemo(() => {
+  const totalEstimation = useMemo(() => {
     if (!hasSelectedTasks) return 25;
-    return Math.max(...selectedPendingTasks.map(t => t.estimation || 25));
+    return selectedPendingTasks.reduce((sum, t) => sum + (t.estimation || 25), 0);
   }, [selectedPendingTasks, hasSelectedTasks]);
+
+  useEffect(() => {
+    if (mode === 'work' && !isRunning) {
+      setTimeLeft(totalEstimation * 60);
+      setTotalTime(totalEstimation * 60);
+    }
+  }, [totalEstimation]);
 
   useEffect(() => {
     selectedPendingTasksRef.current = selectedPendingTasks;
@@ -1182,7 +1251,7 @@ export default function App() {
     } else {
       // Break finished, back to work
       setMode('work');
-      const newTime = hasSelectedTasks ? maxEstimation * 60 : 25 * 60;
+      const newTime = hasSelectedTasks ? totalEstimation * 60 : 25 * 60;
       setTimeLeft(newTime);
       setTotalTime(newTime);
       // setIsRunning(true); // NO iniciar automáticamente el trabajo
@@ -1301,7 +1370,7 @@ export default function App() {
     setIsRunning(false);
     if (mode === 'work') {
       flushTimeUpdates();
-      const newTime = hasSelectedTasks ? maxEstimation * 60 : 25 * 60;
+      const newTime = hasSelectedTasks ? totalEstimation * 60 : 25 * 60;
       setTimeLeft(newTime);
       setTotalTime(newTime);
     } else if (mode === 'shortBreak') {
@@ -1316,7 +1385,7 @@ export default function App() {
   const skipBreak = () => {
     setIsRunning(false);
     setMode('work');
-    const newTime = hasSelectedTasks ? maxEstimation * 60 : 25 * 60;
+    const newTime = hasSelectedTasks ? totalEstimation * 60 : 25 * 60;
     setTimeLeft(newTime);
     setTotalTime(newTime);
   };
@@ -1334,6 +1403,7 @@ export default function App() {
     const filteredTasks = tasks.filter(t => {
       const today = getLocalDateString();
       if (t.completed) return false;
+      if (t.isBacklog) return false; // Hide project backlog tasks
       return tasksView === 'all' ? t.date <= today : t.date > today;
     });
 
@@ -1692,10 +1762,10 @@ export default function App() {
               />
               <button 
                 type="submit"
-                disabled={!newTagName.trim() || tags.length >= 10}
+                disabled={!newTagName.trim() || tags.length >= 10 || isSubmittingTag}
                 className="px-4 rounded-xl bg-emerald-500 text-neutral-950 font-semibold hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center"
               >
-                <Plus size={20} />
+                {isSubmittingTag ? <div className="w-5 h-5 border-2 border-neutral-950 border-t-transparent rounded-full animate-spin"></div> : <Plus size={20} />}
               </button>
             </form>
 
@@ -1749,23 +1819,50 @@ export default function App() {
                 />
               </div>
 
-              <div>
-                <label className="text-xs font-medium text-neutral-400 uppercase tracking-wider mb-1 block px-1">Etiqueta *</label>
-                <select
-                  value={newTaskTagId}
-                  onChange={(e) => setNewTaskTagId(e.target.value)}
-                  className="w-full bg-neutral-900 border border-neutral-700 rounded-xl p-4 text-neutral-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all appearance-none"
-                  required
-                >
-                  <option value="" disabled>Selecciona una etiqueta...</option>
-                  {tags.map(tag => (
-                    <option key={tag.id} value={tag.id}>{tag.name}</option>
-                  ))}
-                </select>
-                {tags.length === 0 && (
-                  <p className="text-xs text-rose-400 mt-1 px-1">Primero debes crear etiquetas.</p>
-                )}
-              </div>
+              {!newTaskProjectId && (
+                <div>
+                  <label className="text-xs font-medium text-neutral-400 uppercase tracking-wider mb-1 block px-1">Etiqueta *</label>
+                  <select
+                    value={newTaskTagId}
+                    onChange={(e) => setNewTaskTagId(e.target.value)}
+                    className="w-full bg-neutral-900 border border-neutral-700 rounded-xl p-4 text-neutral-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all appearance-none"
+                    required={!newTaskProjectId}
+                  >
+                    <option value="" disabled>Selecciona una etiqueta...</option>
+                    {tags.map(tag => (
+                      <option key={tag.id} value={tag.id}>{tag.name}</option>
+                    ))}
+                  </select>
+                  {tags.length === 0 && (
+                    <p className="text-xs text-rose-400 mt-1 px-1">Primero debes crear etiquetas.</p>
+                  )}
+                </div>
+              )}
+
+              {newTaskProjectId && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-neutral-400 uppercase tracking-wider mb-1 block px-1">Fase</label>
+                    <input
+                      type="text"
+                      value={newTaskPhase}
+                      onChange={(e) => setNewTaskPhase(e.target.value)}
+                      placeholder="Ej: Cimientos"
+                      className="w-full bg-neutral-900 border border-neutral-700 rounded-xl p-4 text-neutral-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-neutral-400 uppercase tracking-wider mb-1 block px-1">Estado</label>
+                    <button
+                      type="button"
+                      onClick={() => setNewTaskIsBacklog(!newTaskIsBacklog)}
+                      className={`w-full h-[58px] rounded-xl font-medium transition-colors ${newTaskIsBacklog ? 'bg-neutral-800 text-neutral-300 border border-neutral-700' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'}`}
+                    >
+                      {newTaskIsBacklog ? 'En Backlog' : 'En Hoy'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -1775,7 +1872,8 @@ export default function App() {
                     value={newTaskDate}
                     min={getLocalDateString()}
                     onChange={(e) => setNewTaskDate(e.target.value)}
-                    className="w-full bg-neutral-900 border border-neutral-700 rounded-xl p-4 text-neutral-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all [color-scheme:dark]"
+                    disabled={newTaskIsBacklog}
+                    className="w-full bg-neutral-900 border border-neutral-700 rounded-xl p-4 text-neutral-100 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all [color-scheme:dark] disabled:opacity-50"
                   />
                 </div>
 
@@ -1834,10 +1932,10 @@ export default function App() {
                 )}
                 <button 
                   type="submit"
-                  disabled={!newTaskTitle.trim() || !newTaskTagId}
+                  disabled={!newTaskTitle.trim() || (!newTaskProjectId && !newTaskTagId) || isSubmittingTask}
                   className="flex-1 py-4 mt-2 rounded-xl bg-emerald-500 text-neutral-950 font-semibold hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                  {editingTaskId ? 'Guardar Cambios' : 'Guardar Tarea'}
+                  {isSubmittingTask ? 'Guardando...' : (editingTaskId ? 'Guardar Cambios' : 'Guardar Tarea')}
                 </button>
               </div>
             </form>
@@ -1870,10 +1968,10 @@ export default function App() {
               
               <button 
                 type="submit"
-                disabled={!newIdeaText.trim()}
+                disabled={!newIdeaText.trim() || isSubmittingIdea}
                 className="w-full py-4 mt-2 rounded-xl bg-amber-500 text-neutral-950 font-semibold hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                Guardar Idea
+                {isSubmittingIdea ? 'Guardando...' : 'Guardar Idea'}
               </button>
             </form>
           </div>
@@ -1951,10 +2049,10 @@ export default function App() {
                 )}
                 <button 
                   type="submit"
-                  disabled={!newReminderTitle.trim() || !newReminderDate || !newReminderTime}
+                  disabled={!newReminderTitle.trim() || !newReminderDate || !newReminderTime || isSubmittingReminder}
                   className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 rounded-xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {editingReminderId ? 'Guardar Cambios' : 'Crear Recordatorio'}
+                  {isSubmittingReminder ? 'Guardando...' : (editingReminderId ? 'Guardar Cambios' : 'Crear Recordatorio')}
                 </button>
               </div>
             </form>
@@ -2099,10 +2197,10 @@ export default function App() {
                 )}
                 <button 
                   type="submit"
-                  disabled={!newMedName.trim() || newMedSchedule.length === 0 || newMedDays.length === 0}
+                  disabled={!newMedName.trim() || newMedSchedule.length === 0 || newMedDays.length === 0 || isSubmittingMedication}
                   className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-neutral-950 rounded-xl font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {editingMedicationId ? 'Guardar Cambios' : 'Guardar Medicamento'}
+                  {isSubmittingMedication ? 'Guardando...' : (editingMedicationId ? 'Guardar Cambios' : 'Guardar Medicamento')}
                 </button>
               </div>
             </form>
@@ -2375,6 +2473,7 @@ export default function App() {
                   .slice(0, 5) // Max 5 tasks
                   .map(task => {
                     const tag = tags.find(t => t.id === task.tagId);
+                    const project = projects.find(p => p.id === task.projectId);
                     const isOverdue = task.date < getLocalDateString();
                     return (
                       <div 
@@ -2387,7 +2486,13 @@ export default function App() {
                             {task.title}
                           </span>
                           <div className="flex items-center gap-2 mt-1">
-                            {tag && (
+                            {project && (
+                              <div className="flex items-center gap-1">
+                                <Folder size={10} className={project.color.replace('bg-', 'text-')} />
+                                <span className="text-[10px] text-neutral-500 truncate max-w-[80px]">{project.title}</span>
+                              </div>
+                            )}
+                            {tag && !project && (
                               <div className="flex items-center gap-1">
                                 <div className={`w-2 h-2 rounded-full ${tag.color}`}></div>
                                 <span className="text-[10px] text-neutral-500 truncate max-w-[80px]">{tag.name}</span>
@@ -2565,11 +2670,18 @@ export default function App() {
                         {tasks.map(task => {
                           const isOverdue = task.date < getLocalDateString();
                           const isToday = task.date === getLocalDateString();
+                          const project = projects.find(p => p.id === task.projectId);
                           return (
                             <div key={task.id} className="flex items-center justify-between p-3 bg-neutral-800/50 rounded-xl border border-neutral-800/50 group">
                               <div className="flex-1 flex flex-col min-w-0 mr-3">
                                 <span className={`text-sm truncate ${task.completed ? 'text-neutral-500 line-through' : 'text-neutral-200'}`}>{task.title}</span>
                                 <div className="flex items-center gap-3 mt-1">
+                                  {project && (
+                                    <div className="flex items-center gap-1">
+                                      <Folder size={10} className={project.color.replace('bg-', 'text-')} />
+                                      <span className="text-[10px] text-neutral-500 truncate max-w-[80px]">{project.title}</span>
+                                    </div>
+                                  )}
                                   {!task.completed && (
                                     <span className={`text-[10px] flex items-center gap-1 ${isOverdue ? 'text-rose-400' : isToday ? 'text-emerald-400' : 'text-neutral-500'}`}>
                                       <Calendar size={10} /> 
@@ -3154,6 +3266,287 @@ export default function App() {
           </div>
         )}
 
+        {activeTab === 'proyectos' && (
+          <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-500 pb-24">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <Folder className="text-emerald-500" />
+                Proyectos
+              </h2>
+              <button 
+                onClick={() => setIsAddingProject(true)}
+                className="bg-emerald-500 hover:bg-emerald-400 text-neutral-950 p-2 rounded-xl transition-colors"
+              >
+                <Plus size={24} />
+              </button>
+            </div>
+
+            {selectedProjectId ? (
+              // Project Detail View
+              <div className="space-y-6">
+                {/* Back button and Header */}
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => setSelectedProjectId(null)} className="p-2 bg-neutral-800 rounded-xl hover:bg-neutral-700">
+                      <ArrowRight className="rotate-180" size={20} />
+                    </button>
+                    <div>
+                      <h3 className="text-xl font-bold">{projects.find(p => p.id === selectedProjectId)?.title}</h3>
+                      <p className="text-sm text-neutral-400">{projects.find(p => p.id === selectedProjectId)?.description}</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const proj = projects.find(p => p.id === selectedProjectId);
+                      if (proj) openEditProject(proj);
+                    }}
+                    className="p-2 bg-neutral-800 text-neutral-400 hover:text-amber-400 hover:bg-amber-400/10 rounded-xl transition-colors"
+                  >
+                    <Pencil size={20} />
+                  </button>
+                </div>
+
+                {/* Progress Bar */}
+                {(() => {
+                  const projectTasks = tasks.filter(t => t.projectId === selectedProjectId);
+                  const completed = projectTasks.filter(t => t.completed).length;
+                  const total = projectTasks.length;
+                  const progress = total === 0 ? 0 : Math.round((completed / total) * 100);
+                  const totalTime = projectTasks.reduce((acc, t) => acc + (t.timeSpent || 0), 0);
+                  const m = Math.floor(totalTime / 60);
+                  const h = Math.floor(m / 60);
+                  const remainingM = m % 60;
+
+                  return (
+                    <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-2xl space-y-4">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-neutral-400">Progreso ({completed}/{total})</span>
+                        <span className="font-bold text-emerald-400">{progress}%</span>
+                      </div>
+                      <div className="h-2 bg-neutral-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${progress}%` }}></div>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-neutral-400">
+                        <Clock size={16} />
+                        <span>Tiempo invertido: {h}h {remainingM}m</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Add Task to Project */}
+                <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-2xl">
+                  <h4 className="font-semibold mb-4 text-sm text-neutral-400 uppercase tracking-wider">Añadir Tarea al Proyecto</h4>
+                  <form onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!newTaskTitle.trim() || isSubmittingTask || isSubmittingRef.current) return;
+                    
+                    isSubmittingRef.current = true;
+                    setIsSubmittingTask(true);
+                    try {
+                      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+                        setTasks([{ 
+                          id: Date.now().toString(), 
+                          title: newTaskTitle, 
+                          completed: false, 
+                          selected: false,
+                          date: '', // Empty date means backlog
+                          estimation: newTaskEstimation,
+                          projectId: selectedProjectId,
+                          phase: newTaskPhase,
+                          isBacklog: true
+                        }, ...tasks]);
+                      } else {
+                        await addDoc(collection(db, 'tasks'), {
+                          title: newTaskTitle,
+                          completed: false,
+                          selected: false,
+                          date: '',
+                          estimation: newTaskEstimation,
+                          projectId: selectedProjectId,
+                          phase: newTaskPhase,
+                          isBacklog: true,
+                          createdAt: new Date()
+                        });
+                      }
+                      setNewTaskTitle('');
+                      setNewTaskEstimation(25);
+                      setNewTaskPhase('');
+                    } catch (error) {
+                      console.error("Error adding project task: ", error);
+                    } finally {
+                      setIsSubmittingTask(false);
+                      isSubmittingRef.current = false;
+                    }
+                  }} className="space-y-3">
+                    <input 
+                      type="text" 
+                      placeholder="Nombre de la tarea..." 
+                      value={newTaskTitle}
+                      onChange={e => setNewTaskTitle(e.target.value)}
+                      className="w-full bg-neutral-800 text-neutral-100 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <div className="flex gap-3">
+                      <input 
+                        type="text" 
+                        placeholder="Fase (ej. Cimientos)" 
+                        value={newTaskPhase}
+                        onChange={e => setNewTaskPhase(e.target.value)}
+                        className="flex-1 bg-neutral-800 text-neutral-100 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <input 
+                        type="number" 
+                        placeholder="Minutos" 
+                        value={newTaskEstimation}
+                        onChange={e => setNewTaskEstimation(Number(e.target.value))}
+                        className="w-24 bg-neutral-800 text-neutral-100 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                      <button 
+                        type="submit" 
+                        disabled={!newTaskTitle.trim() || isSubmittingTask}
+                        className="bg-emerald-500 text-neutral-950 px-4 py-3 rounded-xl font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isSubmittingTask ? '...' : <Plus size={20} />}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                {/* Project Tasks List */}
+                <div className="space-y-6">
+                  {(() => {
+                    const projectTasks = tasks.filter(t => t.projectId === selectedProjectId);
+                    const phases = Array.from(new Set(projectTasks.map(t => t.phase || 'Sin Fase')));
+                    
+                    if (projectTasks.length === 0) {
+                      return (
+                        <div className="text-center py-12 bg-neutral-900/50 rounded-3xl border border-neutral-800/50 border-dashed">
+                          <Folder size={48} className="mx-auto text-neutral-700 mb-4" />
+                          <p className="text-neutral-400">Aún no hay tareas en este proyecto.</p>
+                        </div>
+                      );
+                    }
+
+                    return phases.map(phase => {
+                      const phaseTasks = projectTasks.filter(t => (t.phase || 'Sin Fase') === phase);
+                      return (
+                        <div key={phase} className="space-y-3">
+                          <h4 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500/50"></div>
+                            {phase}
+                            <span className="text-xs text-neutral-600 normal-case font-normal ml-2">({phaseTasks.length})</span>
+                          </h4>
+                          <div className="space-y-2">
+                            {phaseTasks.map(task => (
+                              <div key={task.id} className={`p-4 rounded-2xl border transition-colors group ${task.completed ? 'bg-neutral-900/50 border-neutral-800/50 opacity-50' : 'bg-neutral-900 border-neutral-800 hover:border-neutral-700'}`}>
+                                <div className="flex justify-between items-start">
+                                  <div className="flex-1 pr-4">
+                                    <h5 className={`font-medium mb-1 ${task.completed ? 'line-through text-neutral-500' : 'text-neutral-200'}`}>{task.title}</h5>
+                                    <div className="flex flex-wrap items-center gap-3">
+                                      <span className="text-[10px] text-neutral-500 flex items-center gap-1 bg-neutral-800 px-2 py-1 rounded-md">
+                                        <Clock size={10} /> {task.estimation}m
+                                      </span>
+                                      {task.timeSpent !== undefined && task.timeSpent > 0 && (
+                                        <span className="text-[10px] text-neutral-500 flex items-center gap-1 bg-neutral-800 px-2 py-1 rounded-md">
+                                          <Play size={10} /> {Math.floor(task.timeSpent / 60)}m invertidos
+                                        </span>
+                                      )}
+                                      {task.completed && (
+                                        <span className="text-[10px] text-emerald-500/80 flex items-center gap-1 bg-emerald-500/10 px-2 py-1 rounded-md">
+                                          <Check size={10} /> Completada
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {!task.completed && (
+                                      <button 
+                                        onClick={() => openEditTask(task)}
+                                        className="p-2 text-neutral-500 hover:text-amber-400 hover:bg-amber-400/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                        title="Editar tarea"
+                                      >
+                                        <Pencil size={16} />
+                                      </button>
+                                    )}
+                                    {!task.completed && task.isBacklog && (
+                                      <button 
+                                        onClick={async () => {
+                                          const today = getLocalDateString();
+                                          if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+                                            setTasks(tasks.map(t => t.id === task.id ? { ...t, isBacklog: false, date: today } : t));
+                                          } else {
+                                            await updateDoc(doc(db, 'tasks', task.id), { isBacklog: false, date: today });
+                                          }
+                                        }}
+                                        className="text-xs bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 px-3 py-2 rounded-lg transition-colors font-medium flex items-center gap-1"
+                                      >
+                                        <Calendar size={12} /> Mover a Hoy
+                                      </button>
+                                    )}
+                                    {!task.completed && !task.isBacklog && (
+                                      <span className="text-xs bg-blue-500/20 text-blue-400 px-3 py-2 rounded-lg font-medium flex items-center gap-1">
+                                        <Check size={12} /> En Hoy
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            ) : (
+              // Projects List
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {projects.map(project => {
+                  const projectTasks = tasks.filter(t => t.projectId === project.id);
+                  const completed = projectTasks.filter(t => t.completed).length;
+                  const total = projectTasks.length;
+                  const progress = total === 0 ? 0 : Math.round((completed / total) * 100);
+
+                  return (
+                    <div 
+                      key={project.id} 
+                      onClick={() => setSelectedProjectId(project.id)}
+                      className="bg-neutral-900 border border-neutral-800 p-5 rounded-2xl cursor-pointer hover:border-neutral-700 transition-colors group"
+                    >
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-4 h-4 rounded-full ${project.color}`}></div>
+                          <h3 className="font-bold text-lg group-hover:text-emerald-400 transition-colors">{project.title}</h3>
+                        </div>
+                        <ChevronRight className="text-neutral-600 group-hover:text-neutral-400" />
+                      </div>
+                      <p className="text-sm text-neutral-400 mb-6 line-clamp-2">{project.description}</p>
+                      
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-xs text-neutral-500">
+                          <span>Progreso</span>
+                          <span>{progress}%</span>
+                        </div>
+                        <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                          <div className={`h-full ${project.color} transition-all duration-500`} style={{ width: `${progress}%` }}></div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {projects.length === 0 && (
+                  <div className="col-span-full text-center py-12 bg-neutral-900/50 rounded-3xl border border-neutral-800 border-dashed">
+                    <Folder size={48} className="mx-auto text-neutral-700 mb-4" />
+                    <p className="text-neutral-400 font-medium">No hay proyectos activos</p>
+                    <p className="text-sm text-neutral-500 mt-1">Crea uno para organizar tareas complejas</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
       </main>
 
       {/* Modal: Edit Daily Goal */}
@@ -3190,6 +3583,135 @@ export default function App() {
                 Guardar
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Add/Edit Project */}
+      {isAddingProject && (
+        <div className="fixed inset-0 z-50 bg-neutral-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="text-lg font-semibold text-neutral-100 mb-4">{editingProjectId ? 'Editar Proyecto' : 'Nuevo Proyecto'}</h3>
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              if (!newProjectTitle.trim() || isSubmittingProject || isSubmittingRef.current) return;
+              
+              isSubmittingRef.current = true;
+              setIsSubmittingProject(true);
+              try {
+                if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+                  if (editingProjectId) {
+                    setProjects(projects.map(p => p.id === editingProjectId ? { ...p, title: newProjectTitle, description: newProjectDescription, color: newProjectColor } : p));
+                  } else {
+                    setProjects([{
+                      id: Date.now().toString(),
+                      title: newProjectTitle,
+                      description: newProjectDescription,
+                      color: newProjectColor
+                    }, ...projects]);
+                  }
+                } else {
+                  if (editingProjectId) {
+                    await updateDoc(doc(db, 'projects', editingProjectId), {
+                      title: newProjectTitle,
+                      description: newProjectDescription,
+                      color: newProjectColor
+                    });
+                  } else {
+                    await addDoc(collection(db, 'projects'), {
+                      title: newProjectTitle,
+                      description: newProjectDescription,
+                      color: newProjectColor,
+                      createdAt: new Date()
+                    });
+                  }
+                }
+                setNewProjectTitle('');
+                setNewProjectDescription('');
+                setNewProjectColor(PREDEFINED_COLORS[0]);
+                setEditingProjectId(null);
+                setIsAddingProject(false);
+              } catch (error) {
+                console.error("Error saving project: ", error);
+              } finally {
+                setIsSubmittingProject(false);
+                isSubmittingRef.current = false;
+              }
+            }} className="space-y-4">
+              <input
+                type="text"
+                value={newProjectTitle}
+                onChange={(e) => setNewProjectTitle(e.target.value)}
+                className="w-full bg-neutral-800 text-neutral-100 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                placeholder="Nombre del proyecto"
+                autoFocus
+              />
+              <textarea
+                value={newProjectDescription}
+                onChange={(e) => setNewProjectDescription(e.target.value)}
+                className="w-full bg-neutral-800 text-neutral-100 px-4 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none h-24"
+                placeholder="Descripción (opcional)"
+              />
+              <div>
+                <label className="block text-sm font-medium text-neutral-400 mb-2">Color</label>
+                <div className="flex flex-wrap gap-2">
+                  {PREDEFINED_COLORS.map(color => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setNewProjectColor(color)}
+                      className={`w-8 h-8 rounded-full ${color} ${newProjectColor === color ? 'ring-2 ring-white ring-offset-2 ring-offset-neutral-900' : ''}`}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div className="flex gap-3 pt-2">
+                {editingProjectId && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+                        setProjects(projects.filter(p => p.id !== editingProjectId));
+                        // Also delete associated tasks? Let's just delete the project for now
+                      } else {
+                        try {
+                          await deleteDoc(doc(db, 'projects', editingProjectId));
+                        } catch (error) {
+                          console.error("Error deleting project: ", error);
+                        }
+                      }
+                      setEditingProjectId(null);
+                      setIsAddingProject(false);
+                      setSelectedProjectId(null);
+                    }}
+                    className="px-4 py-3 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 rounded-xl font-medium transition-colors border border-rose-500/20"
+                    title="Eliminar proyecto"
+                  >
+                    <Trash2 size={20} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAddingProject(false);
+                    setEditingProjectId(null);
+                    setNewProjectTitle('');
+                    setNewProjectDescription('');
+                    setNewProjectColor(PREDEFINED_COLORS[0]);
+                  }}
+                  className="flex-1 py-3 rounded-xl font-medium text-neutral-400 bg-neutral-800 hover:bg-neutral-700 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newProjectTitle.trim() || isSubmittingProject}
+                  className="flex-1 py-3 rounded-xl font-medium text-neutral-950 bg-emerald-500 hover:bg-emerald-400 transition-colors disabled:opacity-50"
+                >
+                  {isSubmittingProject ? 'Guardando...' : (editingProjectId ? 'Guardar' : 'Crear')}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -3244,6 +3766,13 @@ export default function App() {
         >
           <BarChart2 size={20} />
           <span className="text-[10px] font-medium uppercase tracking-wider">Stats</span>
+        </button>
+        <button 
+          onClick={() => setActiveTab('proyectos')} 
+          className={`flex-1 py-4 flex flex-col items-center gap-1 transition-colors ${activeTab === 'proyectos' ? 'text-emerald-400' : 'text-neutral-500 hover:text-neutral-300'}`}
+        >
+          <Folder size={20} />
+          <span className="text-[10px] font-medium uppercase tracking-wider">Proyectos</span>
         </button>
       </nav>
     </div>

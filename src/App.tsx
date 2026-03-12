@@ -3,84 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { Play, Square, Plus, Minus, RotateCcw, Bell, CheckSquare, Lightbulb, Check, X, Tags, Calendar, Clock, ChevronRight, ChevronDown, ChevronUp, Trash2, ArrowRight, Pencil, History, BellRing, AlignLeft, Pill, AlertTriangle, BarChart2, PieChart, Lock, Maximize2, Headphones, Volume2, Volume1, Folder } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Play, Square, Plus, Minus, RotateCcw, Bell, CheckSquare, Lightbulb, Check, X, Tags, Calendar, Clock, ChevronRight, ChevronDown, ChevronUp, Trash2, ArrowRight, Pencil, History, BellRing, AlignLeft, Pill, AlertTriangle, BarChart2, PieChart, Lock, Maximize2, Headphones, Volume2, Volume1, Folder, List, LayoutGrid, Tag as TagIcon } from 'lucide-react';
 import { collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, increment, where } from 'firebase/firestore';
 import { db } from './firebase';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart as RePieChart, Pie, Cell, LineChart, Line } from 'recharts';
 
-type Tag = { id: string; name: string; color: string };
-type Idea = { id: string; text: string; createdAt?: any };
-type Project = {
-  id: string;
-  title: string;
-  description: string;
-  color: string;
-  createdAt?: any;
-};
-
-type Task = { 
-  id: string; 
-  title: string; 
-  completed: boolean; 
-  selected: boolean; 
-  createdAt?: any;
-  date: string; // YYYY-MM-DD
-  estimation: number; // Minutos
-  timeSpent?: number; // Segundos
-  completedAt?: string; // YYYY-MM-DD
-  tagId?: string;
-  projectId?: string;
-  phase?: string;
-  isBacklog?: boolean;
-};
-
-type Reminder = {
-  id: string;
-  title: string;
-  detail: string;
-  date: string; // YYYY-MM-DD
-  time: string; // HH:mm
-  completed: boolean;
-  createdAt?: any;
-};
-
-type Medication = {
-  id: string;
-  name: string;
-  dosage: string;
-  stock: number;
-  minStock: number;
-  schedule: string[]; // ["08:00", "20:00"]
-  days: number[]; // [0, 1, 2, 3, 4, 5, 6] (0 = Sunday)
-  notes?: string;
-  createdAt?: any;
-};
-
-type MedicationLog = {
-  id: string;
-  medicationId: string;
-  medicationName: string;
-  date: string; // YYYY-MM-DD
-  time: string; // HH:mm (scheduled time)
-  takenAt: string; // ISO string
-  status: 'taken' | 'skipped';
-  reason?: string;
-};
-
-type Mode = 'work' | 'shortBreak' | 'longBreak';
-
-const PREDEFINED_COLORS = [
-  'bg-emerald-500', 'bg-blue-500', 'bg-violet-500', 'bg-amber-500', 'bg-rose-500',
-  'bg-cyan-500', 'bg-fuchsia-500', 'bg-lime-500', 'bg-orange-500', 'bg-indigo-500'
-];
-
-const getLocalDateString = (date: Date = new Date()) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
+import { Tag, Idea, Project, Task, Reminder, Medication, MedicationLog, FocusLog, Mode } from './types';
+import { PREDEFINED_COLORS, CHART_COLORS } from './constants';
+import { getLocalDateString, formatTime, getOverdueText } from './utils/dateUtils';
+import { playAlertSound } from './utils/audioUtils';
+import { sendNotification } from './utils/notifUtils';
+import { useStatistics } from './hooks/useStatistics';
+import { useTimer } from './hooks/useTimer';
+import { useFirebase } from './hooks/useFirebase';
 
 export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -107,79 +43,17 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'inicio' | 'tareas' | 'ideas' | 'historial' | 'recordatorios' | 'medicacion' | 'estadisticas' | 'proyectos'>('inicio');
   const [statsPeriod, setStatsPeriod] = useState<'today' | 'week' | 'month' | 'year'>('week');
   
-  // Timer State
-  const [mode, setMode] = useState<Mode>(() => {
-    const saved = localStorage.getItem('pomodoroState');
-    return saved ? JSON.parse(saved).mode : 'work';
-  });
-  const [timeLeft, setTimeLeft] = useState(() => {
-    const saved = localStorage.getItem('pomodoroState');
-    if (saved) {
-      const state = JSON.parse(saved);
-      if (state.isRunning) {
-        const elapsed = Math.round((Date.now() - state.lastUpdated) / 1000);
-        const newTime = state.timeLeft - elapsed;
-        return newTime > 0 ? newTime : 0;
-      }
-      return state.timeLeft;
-    }
-    return 25 * 60;
-  });
-  const [totalTime, setTotalTime] = useState(() => {
-    const saved = localStorage.getItem('pomodoroState');
-    return saved ? JSON.parse(saved).totalTime : 25 * 60;
-  });
-  const [isRunning, setIsRunning] = useState(() => {
-    const saved = localStorage.getItem('pomodoroState');
-    if (saved) {
-      const state = JSON.parse(saved);
-      if (state.isRunning) {
-        const elapsed = Math.round((Date.now() - state.lastUpdated) / 1000);
-        return state.timeLeft - elapsed > 0;
-      }
-    }
-    return false;
-  });
-  const [pomodorosCompleted, setPomodorosCompleted] = useState(() => {
-    const saved = localStorage.getItem('pomodoroState');
-    return saved ? JSON.parse(saved).pomodorosCompleted : 0;
-  });
-
-  // Persist Timer State
-  useEffect(() => {
-    localStorage.setItem('pomodoroState', JSON.stringify({
-      mode,
-      timeLeft,
-      totalTime,
-      isRunning,
-      pomodorosCompleted,
-      lastUpdated: Date.now()
-    }));
-  }, [mode, timeLeft, totalTime, isRunning, pomodorosCompleted]);
-
-  // Focus Logs State (for Discipline Metric)
-  type FocusLog = {
-    id: string;
-    date: string; // ISO string
-    status: 'completed' | 'abandoned';
-    duration: number; // seconds
-  };
-  const [focusLogs, setFocusLogs] = useState<FocusLog[]>([]);
-
-  useEffect(() => {
-    if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
-      // Local storage fallback
-      const savedLogs = localStorage.getItem('focusLogs');
-      if (savedLogs) setFocusLogs(JSON.parse(savedLogs));
-    } else {
-      const q = query(collection(db, 'focusLogs'), orderBy('date', 'desc'));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const logsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as FocusLog));
-        setFocusLogs(logsData);
-      });
-      return () => unsubscribe();
-    }
-  }, []);
+  const {
+    tasks, setTasks,
+    tags, setTags,
+    ideas, setIdeas,
+    reminders, setReminders,
+    medications, setMedications,
+    medicationLogs, setMedicationLogs,
+    projects, setProjects,
+    focusLogs, setFocusLogs,
+    scheduledTasks, setScheduledTasks
+  } = useFirebase();
 
   const addFocusLog = async (status: 'completed' | 'abandoned', duration: number) => {
     const newLog = {
@@ -201,6 +75,183 @@ export default function App() {
     }
   };
   
+  // Scheduled Tasks State
+  const [isAddingScheduledTask, setIsAddingScheduledTask] = useState(false);
+  const [editingScheduledTaskId, setEditingScheduledTaskId] = useState<string | null>(null);
+  const [newScheduledTaskTitle, setNewScheduledTaskTitle] = useState('');
+  const [newScheduledTaskEstimation, setNewScheduledTaskEstimation] = useState(25);
+  const [newScheduledTaskTagId, setNewScheduledTaskTagId] = useState<string>('');
+  const [newScheduledTaskRecurrence, setNewScheduledTaskRecurrence] = useState<{ type: 'daily' | 'weekly' | 'monthly', daysOfWeek?: number[], dayOfMonth?: number }>({ type: 'daily' });
+  const [isSubmittingScheduledTask, setIsSubmittingScheduledTask] = useState(false);
+
+  // Scheduled Tasks Prompt State
+  const [showScheduledPrompt, setShowScheduledPrompt] = useState(false);
+  const [dueScheduledTasks, setDueScheduledTasks] = useState<any[]>([]);
+  const [selectedScheduledTasksToAdd, setSelectedScheduledTasksToAdd] = useState<string[]>([]);
+
+  // Check for due scheduled tasks
+  useEffect(() => {
+    if (scheduledTasks.length === 0) return;
+    
+    const today = new Date();
+    const todayStr = getLocalDateString(today);
+    const todayDayOfWeek = today.getDay();
+    const todayDayOfMonth = today.getDate();
+
+    const due = scheduledTasks.filter(st => {
+      // If already prompted today, skip
+      if (st.lastPromptedDate === todayStr) return false;
+
+      if (st.recurrence.type === 'daily') return true;
+      if (st.recurrence.type === 'weekly' && st.recurrence.daysOfWeek?.includes(todayDayOfWeek)) return true;
+      if (st.recurrence.type === 'monthly' && st.recurrence.dayOfMonth === todayDayOfMonth) return true;
+      
+      return false;
+    });
+
+    if (due.length > 0 && !showScheduledPrompt) {
+      setDueScheduledTasks(due);
+      setSelectedScheduledTasksToAdd(due.map(t => t.id));
+      setShowScheduledPrompt(true);
+    }
+  }, [scheduledTasks]);
+
+  const handleAddScheduledTasksToToday = async () => {
+    const todayStr = getLocalDateString();
+    const tasksToAdd = dueScheduledTasks.filter(st => selectedScheduledTasksToAdd.includes(st.id));
+    
+    try {
+      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+        // Local fallback
+        const newTasks = tasksToAdd.map(st => ({
+          id: Date.now().toString() + Math.random().toString(36).substring(7),
+          title: st.title,
+          completed: false,
+          selected: false,
+          date: todayStr,
+          estimation: st.estimation,
+          tagId: st.tagId,
+          isBacklog: false
+        }));
+        setTasks([...tasks, ...newTasks]);
+        
+        const updatedScheduledTasks = scheduledTasks.map(st => 
+          dueScheduledTasks.some(due => due.id === st.id) 
+            ? { ...st, lastPromptedDate: todayStr } 
+            : st
+        );
+        setScheduledTasks(updatedScheduledTasks);
+      } else {
+        // Firebase
+        await Promise.all([
+          ...tasksToAdd.map(st => addDoc(collection(db, 'tasks'), {
+            title: st.title,
+            completed: false,
+            selected: false,
+            date: todayStr,
+            estimation: st.estimation,
+            tagId: st.tagId || null,
+            isBacklog: false,
+            createdAt: new Date()
+          })),
+          ...dueScheduledTasks.map(st => updateDoc(doc(db, 'scheduledTasks', st.id), {
+            lastPromptedDate: todayStr
+          }))
+        ]);
+      }
+      setShowScheduledPrompt(false);
+    } catch (error) {
+      console.error("Error adding scheduled tasks", error);
+    }
+  };
+
+  const handleIgnoreScheduledTasks = async () => {
+    const todayStr = getLocalDateString();
+    try {
+      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+        const updatedScheduledTasks = scheduledTasks.map(st => 
+          dueScheduledTasks.some(due => due.id === st.id) 
+            ? { ...st, lastPromptedDate: todayStr } 
+            : st
+        );
+        setScheduledTasks(updatedScheduledTasks);
+      } else {
+        await Promise.all(
+          dueScheduledTasks.map(st => updateDoc(doc(db, 'scheduledTasks', st.id), {
+            lastPromptedDate: todayStr
+          }))
+        );
+      }
+      setShowScheduledPrompt(false);
+    } catch (error) {
+      console.error("Error ignoring scheduled tasks", error);
+    }
+  };
+
+  const handleSaveScheduledTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newScheduledTaskTitle.trim() || isSubmittingScheduledTask || isSubmittingRef.current) return;
+    
+    setIsSubmittingScheduledTask(true);
+    isSubmittingRef.current = true;
+
+    const taskData = {
+      title: newScheduledTaskTitle.trim(),
+      estimation: newScheduledTaskEstimation,
+      tagId: newScheduledTaskTagId || null,
+      recurrence: newScheduledTaskRecurrence,
+      createdAt: new Date()
+    };
+
+    try {
+      if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+        if (editingScheduledTaskId) {
+          setScheduledTasks(prev => prev.map(t => t.id === editingScheduledTaskId ? { ...t, ...taskData, id: t.id } : t));
+        } else {
+          setScheduledTasks([{ ...taskData, id: Date.now().toString() }, ...scheduledTasks]);
+        }
+      } else {
+        if (editingScheduledTaskId) {
+          await updateDoc(doc(db, 'scheduledTasks', editingScheduledTaskId), taskData);
+        } else {
+          await addDoc(collection(db, 'scheduledTasks'), taskData);
+        }
+      }
+      setIsAddingScheduledTask(false);
+      setEditingScheduledTaskId(null);
+      setNewScheduledTaskTitle('');
+      setNewScheduledTaskEstimation(25);
+      setNewScheduledTaskTagId('');
+      setNewScheduledTaskRecurrence({ type: 'daily' });
+    } catch (error) {
+      console.error("Error saving scheduled task: ", error);
+    } finally {
+      setIsSubmittingScheduledTask(false);
+      setTimeout(() => { isSubmittingRef.current = false; }, 300);
+    }
+  };
+
+  const handleDeleteScheduledTask = async (id: string) => {
+    if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
+      setScheduledTasks(prev => prev.filter(t => t.id !== id));
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, 'scheduledTasks', id));
+    } catch (error) {
+      console.error("Error deleting scheduled task: ", error);
+    }
+  };
+
+  const openEditScheduledTask = (task: any) => {
+    setEditingScheduledTaskId(task.id);
+    setNewScheduledTaskTitle(task.title);
+    setNewScheduledTaskEstimation(task.estimation || 25);
+    setNewScheduledTaskTagId(task.tagId || '');
+    setNewScheduledTaskRecurrence(task.recurrence);
+    setIsAddingScheduledTask(true);
+  };
+
   // Zen Mode State
   const [isZenMode, setIsZenMode] = useState(false);
 
@@ -243,7 +294,6 @@ export default function App() {
   }, [focusedMinutesToday, dailyGoalMinutes, lastActiveDate, streak]);
 
   // Tasks State
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [isAddingTask, setIsAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDate, setNewTaskDate] = useState(getLocalDateString());
@@ -255,13 +305,11 @@ export default function App() {
   const [isSubmittingTask, setIsSubmittingTask] = useState(false);
   
   // Tags State
-  const [tags, setTags] = useState<Tag[]>([]);
   const [isManagingTags, setIsManagingTags] = useState(false);
   const [isSubmittingTag, setIsSubmittingTag] = useState(false);
   const [newTagName, setNewTagName] = useState('');
 
   // Projects State
-  const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [isSubmittingProject, setIsSubmittingProject] = useState(false);
@@ -272,7 +320,6 @@ export default function App() {
   const [newTaskPhase, setNewTaskPhase] = useState('');
 
   // Ideas State
-  const [ideas, setIdeas] = useState<Idea[]>([]);
   const [isAddingIdea, setIsAddingIdea] = useState(false);
   const [isSubmittingIdea, setIsSubmittingIdea] = useState(false);
   const [newIdeaText, setNewIdeaText] = useState('');
@@ -280,7 +327,6 @@ export default function App() {
   const [convertingToReminderIdeaId, setConvertingToReminderIdeaId] = useState<string | null>(null);
 
   // Reminders State
-  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [activeReminderQueue, setActiveReminderQueue] = useState<Reminder[]>([]);
   const [isAddingReminder, setIsAddingReminder] = useState(false);
   const [isSubmittingReminder, setIsSubmittingReminder] = useState(false);
@@ -291,8 +337,6 @@ export default function App() {
   const [newReminderTime, setNewReminderTime] = useState('');
 
   // Medication State
-  const [medications, setMedications] = useState<Medication[]>([]);
-  const [medicationLogs, setMedicationLogs] = useState<MedicationLog[]>([]);
   const triggeredMedicationsRef = useRef<Set<string>>(new Set());
   const [isAddingMedication, setIsAddingMedication] = useState(false);
   const [isSubmittingMedication, setIsSubmittingMedication] = useState(false);
@@ -310,136 +354,16 @@ export default function App() {
 
   // View State
   const [homeView, setHomeView] = useState<'today' | 'overdue'>('today');
-  const [tasksView, setTasksView] = useState<'all' | 'future'>('all');
+  const [tasksView, setTasksView] = useState<'all' | 'future' | 'scheduled'>('all');
+  const [tasksLayout, setTasksLayout] = useState<'list' | 'kanban'>('list');
   const [expandedTags, setExpandedTags] = useState<Record<string, boolean>>({});
   
-  // Fetch Tasks and Tags from Firestore
-  useEffect(() => {
-    if (!import.meta.env.VITE_FIREBASE_PROJECT_ID) {
-      console.warn("Firebase no está configurado. Usando datos locales.");
-      const today = getLocalDateString();
-      setTasks([
-        { id: '1', title: 'Configurar Firebase Firestore (Local)', completed: false, selected: true, date: today, estimation: 1, tagId: 't1' },
-        { id: '2', title: 'Implementar lógica del temporizador (Local)', completed: false, selected: false, date: today, estimation: 2, tagId: 't2' }
-      ]);
-      setTags([
-        { id: 't1', name: 'Desarrollo', color: PREDEFINED_COLORS[0] },
-        { id: 't2', name: 'Diseño', color: PREDEFINED_COLORS[1] }
-      ]);
-      return;
-    }
-
-    // Fetch Tasks
-    const qTasks = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'));
-    const unsubscribeTasks = onSnapshot(qTasks, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Task[];
-      setTasks(tasksData);
-    });
-
-    // Fetch Tags
-    const qTags = query(collection(db, 'tags'));
-    const unsubscribeTags = onSnapshot(qTags, (snapshot) => {
-      const tagsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Tag[];
-      setTags(tagsData);
-    });
-
-    // Fetch Ideas
-    const qIdeas = query(collection(db, 'ideas'), orderBy('createdAt', 'desc'));
-    const unsubscribeIdeas = onSnapshot(qIdeas, (snapshot) => {
-      const ideasData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Idea[];
-      setIdeas(ideasData);
-    });
-
-    // Fetch Reminders
-    const qReminders = query(collection(db, 'reminders'), orderBy('createdAt', 'desc'));
-    const unsubscribeReminders = onSnapshot(qReminders, (snapshot) => {
-      const remindersData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Reminder[];
-      setReminders(remindersData);
-    });
-
-    // Fetch Medications
-    const qMeds = query(collection(db, 'medications'), orderBy('name', 'asc'));
-    const unsubscribeMeds = onSnapshot(qMeds, (snapshot) => {
-      const medsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Medication[];
-      setMedications(medsData);
-    });
-
-    // Fetch Medication Logs (Last 30 days ideally, but all for now)
-    const qMedLogs = query(collection(db, 'medicationLogs'), orderBy('date', 'desc'));
-    const unsubscribeMedLogs = onSnapshot(qMedLogs, (snapshot) => {
-      const logsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as MedicationLog[];
-      setMedicationLogs(logsData);
-    });
-
-    // Fetch Projects
-    const qProjects = query(collection(db, 'projects'), orderBy('createdAt', 'desc'));
-    const unsubscribeProjects = onSnapshot(qProjects, (snapshot) => {
-      const projectsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Project[];
-      setProjects(projectsData);
-    });
-
-    return () => {
-      unsubscribeTasks();
-      unsubscribeTags();
-      unsubscribeIdeas();
-      unsubscribeReminders();
-      unsubscribeMeds();
-      unsubscribeMedLogs();
-      unsubscribeProjects();
-    };
-  }, []);
-
   // Request Notification Permission
   useEffect(() => {
     if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
       Notification.requestPermission();
     }
   }, []);
-
-  const playAlertSound = () => {
-    // Usar un sonido de sistema simple usando la API de Audio
-    try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-      
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // Nota A5
-      oscillator.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.5); // Baja a A4
-      
-      gainNode.gain.setValueAtTime(1, audioCtx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
-      
-      oscillator.start(audioCtx.currentTime);
-      oscillator.stop(audioCtx.currentTime + 0.5);
-    } catch (e) {
-      console.error("Audio API not supported", e);
-    }
-  };
 
   // Reminder Checker
   useEffect(() => {
@@ -727,16 +651,6 @@ export default function App() {
     setNewTaskTitle(idea.text);
     setConvertingIdeaId(idea.id);
     setIsAddingTask(true);
-  };
-
-  const getOverdueText = (taskDate: string) => {
-    const todayStr = getLocalDateString();
-    if (taskDate >= todayStr) return '';
-    const today = new Date(todayStr);
-    const tDate = new Date(taskDate);
-    const diffTime = today.getTime() - tDate.getTime();
-    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays === 1 ? 'Atrasada 1 día' : `Atrasada ${diffDays} días`;
   };
 
   const openEditProject = (project: Project) => {
@@ -1098,7 +1012,7 @@ export default function App() {
       await Promise.all(Object.entries(updates).map(([id, time]) => {
         const taskRef = doc(db, 'tasks', id);
         return updateDoc(taskRef, {
-          timeSpent: increment(time)
+          timeSpent: increment(time as number)
         });
       }));
     } catch (error) {
@@ -1106,139 +1020,18 @@ export default function App() {
     }
   };
 
-  // Timer Logic
-  const expectedEndTimeRef = useRef<number | null>(null);
-  const workerRef = useRef<Worker | null>(null);
-
-  const sendNotification = async (title: string, body: string) => {
-    if (!('Notification' in window) || Notification.permission !== 'granted') return;
-    try {
-      if ('serviceWorker' in navigator) {
-        const registration = await navigator.serviceWorker.ready;
-        if (registration && 'showNotification' in registration) {
-          await registration.showNotification(title, {
-            body,
-            icon: '/icon.svg',
-            vibrate: [200, 100, 200],
-            tag: 'zentask-timer',
-            renotify: true
-          });
-          return;
-        }
-      }
-      new Notification(title, { body, icon: '/icon.svg' });
-    } catch (e) {
-      new Notification(title, { body, icon: '/icon.svg' });
+  const handleTick = (elapsedSeconds: number, remaining: number) => {
+    selectedPendingTasksRef.current.forEach(t => {
+      pendingTimeUpdates.current[t.id] = (pendingTimeUpdates.current[t.id] || 0) + elapsedSeconds;
+    });
+    if (remaining % 10 === 0 || remaining === 0) {
+      flushTimeUpdates();
     }
   };
 
-  useEffect(() => {
-    // Create Web Worker for background timer
-    const workerCode = `
-      let intervalId = null;
-      let expectedEndTime = null;
-
-      self.onmessage = function(e) {
-        if (e.data.command === 'start') {
-          expectedEndTime = e.data.expectedEndTime;
-          if (intervalId) clearInterval(intervalId);
-          intervalId = setInterval(() => {
-            const now = Date.now();
-            const remaining = Math.max(0, Math.round((expectedEndTime - now) / 1000));
-            self.postMessage({ remaining });
-            if (remaining === 0) {
-              clearInterval(intervalId);
-            }
-          }, 1000);
-        } else if (e.data.command === 'stop') {
-          if (intervalId) clearInterval(intervalId);
-        }
-      };
-    `;
-    const blob = new Blob([workerCode], { type: 'application/javascript' });
-    const workerUrl = URL.createObjectURL(blob);
-    workerRef.current = new Worker(workerUrl);
-
-    return () => {
-      workerRef.current?.terminate();
-      URL.revokeObjectURL(workerUrl);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (isRunning && timeLeft > 0) {
-      if (!expectedEndTimeRef.current) {
-        expectedEndTimeRef.current = Date.now() + timeLeft * 1000;
-      }
-
-      if (workerRef.current) {
-        workerRef.current.onmessage = (e) => {
-          const remaining = e.data.remaining;
-          
-          setTimeLeft((prev) => {
-            const secondsPassed = prev - remaining;
-            
-            if (secondsPassed > 0 && mode === 'work') {
-              selectedPendingTasksRef.current.forEach(t => {
-                pendingTimeUpdates.current[t.id] = (pendingTimeUpdates.current[t.id] || 0) + secondsPassed;
-              });
-              // Flush every 10 seconds
-              if (remaining % 10 === 0 || remaining === 0) {
-                flushTimeUpdates();
-              }
-            }
-
-            if (remaining === 0) {
-              workerRef.current?.postMessage({ command: 'stop' });
-              setIsRunning(false);
-              expectedEndTimeRef.current = null;
-              if (mode === 'work') flushTimeUpdates();
-              playAlertSound();
-              sendNotification(
-                mode === 'work' ? '¡Enfoque Terminado!' : '¡Descanso Terminado!',
-                mode === 'work' ? 'Es hora de tomar un descanso.' : 'Es hora de volver al trabajo.'
-              );
-              handleTimerComplete();
-            }
-
-            return remaining;
-          });
-        };
-
-        workerRef.current.postMessage({ 
-          command: 'start', 
-          expectedEndTime: expectedEndTimeRef.current 
-        });
-      }
-    } else {
-      expectedEndTimeRef.current = null;
-      workerRef.current?.postMessage({ command: 'stop' });
-    }
-
-    return () => {
-      workerRef.current?.postMessage({ command: 'stop' });
-    };
-  }, [isRunning, mode]);
-
-  const toggleTimer = () => {
-    if (isRunning) return; // Prevent pausing/stopping via this button
-
-    if (mode === 'work' && selectedPendingTasks.length === 0) {
-      // No inicia si no hay tareas seleccionadas
-      return;
-    }
-    
-    setIsRunning(true);
-    if (mode === 'work') {
-      setIsZenMode(true);
-    }
-  };
-
-
-
-  const handleTimerComplete = () => {
-    if (mode === 'work') {
-      // Log completed session
+  const handleTimerComplete = (completedMode: Mode) => {
+    if (completedMode === 'work') {
+      flushTimeUpdates();
       addFocusLog('completed', totalTime);
       
       if (selectedPendingTasksRef.current.length > 0) {
@@ -1249,29 +1042,43 @@ export default function App() {
         startBreak();
       }
     } else {
-      // Break finished, back to work
       setMode('work');
       const newTime = hasSelectedTasks ? totalEstimation * 60 : 25 * 60;
       setTimeLeft(newTime);
       setTotalTime(newTime);
-      // setIsRunning(true); // NO iniciar automáticamente el trabajo
     }
   };
 
-  const startBreak = () => {
-    const newCount = pomodorosCompleted + 1;
-    setPomodorosCompleted(newCount);
+  const {
+    mode,
+    setMode,
+    timeLeft,
+    setTimeLeft,
+    totalTime,
+    setTotalTime,
+    isRunning,
+    setIsRunning,
+    pomodorosCompleted,
+    resetTimer,
+    startBreak,
+    skipBreak,
+    progress,
+    isWork
+  } = useTimer({
+    hasSelectedTasks,
+    totalEstimation,
+    onTimerComplete: handleTimerComplete,
+    onTick: handleTick
+  });
+
+  const handleToggleTimer = () => {
+    if (isRunning) return;
+    if (mode === 'work' && selectedPendingTasks.length === 0) return;
     
-    if (newCount % 4 === 0) {
-      setMode('longBreak');
-      setTimeLeft(15 * 60);
-      setTotalTime(15 * 60);
-    } else {
-      setMode('shortBreak');
-      setTimeLeft(5 * 60);
-      setTotalTime(5 * 60);
+    setIsRunning(true);
+    if (mode === 'work') {
+      setIsZenMode(true);
     }
-    // setIsRunning(true); // NO iniciar automáticamente el descanso
   };
 
   const handleReviewAnswer = async (completed: boolean) => {
@@ -1325,16 +1132,16 @@ export default function App() {
     if (isRunning && mode === 'work') {
       setIsConfirmingReset(true);
     } else {
-      resetTimer();
+      handleResetTimer();
     }
   };
 
   const confirmReset = (completedTask: boolean = false) => {
-    resetTimer(completedTask);
+    handleResetTimer(completedTask);
     setIsConfirmingReset(false);
   };
 
-  const resetTimer = (completedTask: boolean = false) => {
+  const handleResetTimer = (completedTask: boolean = false) => {
     if (completedTask) {
       const todayStr = getLocalDateString();
       
@@ -1370,34 +1177,9 @@ export default function App() {
     setIsRunning(false);
     if (mode === 'work') {
       flushTimeUpdates();
-      const newTime = hasSelectedTasks ? totalEstimation * 60 : 25 * 60;
-      setTimeLeft(newTime);
-      setTotalTime(newTime);
-    } else if (mode === 'shortBreak') {
-      setTimeLeft(5 * 60);
-      setTotalTime(5 * 60);
-    } else {
-      setTimeLeft(15 * 60);
-      setTotalTime(15 * 60);
     }
+    resetTimer();
   };
-
-  const skipBreak = () => {
-    setIsRunning(false);
-    setMode('work');
-    const newTime = hasSelectedTasks ? totalEstimation * 60 : 25 * 60;
-    setTimeLeft(newTime);
-    setTotalTime(newTime);
-  };
-
-  const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  };
-
-  const progress = (timeLeft / totalTime) * 100;
-  const isWork = mode === 'work';
 
   const getGroupedTasks = () => {
     const filteredTasks = tasks.filter(t => {
@@ -1491,167 +1273,8 @@ export default function App() {
     return historyDays;
   };
 
-  const getStatisticsData = () => {
-    const now = new Date();
-    let startDate = new Date();
-    
-    if (statsPeriod === 'today') {
-      startDate.setHours(0, 0, 0, 0);
-    } else if (statsPeriod === 'week') {
-      startDate.setDate(now.getDate() - 7);
-    } else if (statsPeriod === 'month') {
-      startDate.setMonth(now.getMonth() - 1);
-    } else if (statsPeriod === 'year') {
-      startDate.setFullYear(now.getFullYear() - 1);
-    }
-
-    const startDateStr = getLocalDateString(startDate);
-
-    // Filter tasks based on period
-    const periodTasks = tasks.filter(t => {
-      if (!t.completed || !t.completedAt) return false;
-      return t.completedAt >= startDateStr;
-    });
-
-    // 1. Productivity (Minutes per day/month)
-    const productivityData = [];
-    if (statsPeriod === 'today') {
-       // Hourly breakdown? Or just total for today
-       productivityData.push({
-         name: 'Hoy',
-         minutos: periodTasks.reduce((acc, t) => acc + Math.floor((t.timeSpent || 0) / 60), 0)
-       });
-    } else {
-      // Group by date
-      const groupedByDate: Record<string, number> = {};
-      
-      // Initialize dates
-      let currentDate = new Date(startDate);
-      while (currentDate <= now) {
-        const dateStr = getLocalDateString(currentDate);
-        // Format date for display
-        let displayDate = dateStr;
-        if (statsPeriod === 'week') {
-           displayDate = currentDate.toLocaleDateString('es-ES', { weekday: 'short' });
-        } else if (statsPeriod === 'month') {
-           displayDate = currentDate.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
-        } else if (statsPeriod === 'year') {
-           displayDate = currentDate.toLocaleDateString('es-ES', { month: 'short' });
-        }
-        
-        if (!groupedByDate[displayDate]) groupedByDate[displayDate] = 0;
-        currentDate.setDate(currentDate.getDate() + 1);
-      }
-
-      periodTasks.forEach(t => {
-        if (!t.completedAt) return;
-        const d = new Date(t.completedAt);
-        // Adjust noon to avoid timezone issues
-        const dNoon = new Date(t.completedAt + 'T12:00:00');
-        
-        let displayDate = t.completedAt;
-        if (statsPeriod === 'week') {
-           displayDate = dNoon.toLocaleDateString('es-ES', { weekday: 'short' });
-        } else if (statsPeriod === 'month') {
-           displayDate = dNoon.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
-        } else if (statsPeriod === 'year') {
-           displayDate = dNoon.toLocaleDateString('es-ES', { month: 'short' });
-        }
-
-        if (groupedByDate[displayDate] !== undefined) {
-          groupedByDate[displayDate] += Math.floor((t.timeSpent || 0) / 60);
-        }
-      });
-
-      Object.entries(groupedByDate).forEach(([name, minutos]) => {
-        productivityData.push({ name, minutos });
-      });
-    }
-
-    // 2. Tags Distribution (By Count)
-    const tagsDistribution: Record<string, number> = {};
-    periodTasks.forEach(t => {
-      const tag = tags.find(tag => tag.id === t.tagId);
-      const tagName = tag ? tag.name : 'Sin Etiqueta';
-      tagsDistribution[tagName] = (tagsDistribution[tagName] || 0) + 1;
-    });
-    
-    const pieData = Object.entries(tagsDistribution).map(([name, value]) => ({
-      name,
-      value
-    })).filter(d => d.value > 0);
-
-    // 3. Estimation Accuracy (Aggregated)
-    const estimationBuckets = [
-      { name: '< 30m', min: 0, max: 30, totalEst: 0, totalReal: 0, count: 0 },
-      { name: '30m - 1h', min: 30, max: 60, totalEst: 0, totalReal: 0, count: 0 },
-      { name: '> 1h', min: 60, max: 9999, totalEst: 0, totalReal: 0, count: 0 },
-    ];
-
-    let totalEstimationError = 0;
-    let tasksWithEstimation = 0;
-
-    periodTasks.forEach(t => {
-      if (t.estimation > 0) {
-        const realMinutes = Math.floor((t.timeSpent || 0) / 60);
-        const bucket = estimationBuckets.find(b => t.estimation > b.min && t.estimation <= b.max);
-        if (bucket) {
-          bucket.totalEst += t.estimation;
-          bucket.totalReal += realMinutes;
-          bucket.count++;
-        }
-        
-        // Calculate error (Real - Estimated)
-        totalEstimationError += (realMinutes - t.estimation);
-        tasksWithEstimation++;
-      }
-    });
-
-    const estimationChartData = estimationBuckets.map(b => ({
-      name: b.name,
-      estimado: b.count > 0 ? Math.round(b.totalEst / b.count) : 0,
-      real: b.count > 0 ? Math.round(b.totalReal / b.count) : 0,
-      count: b.count
-    }));
-
-    const avgError = tasksWithEstimation > 0 ? Math.round(totalEstimationError / tasksWithEstimation) : 0;
-    const estimationFeedback = avgError > 5 
-      ? `Tiendes a subestimar por ${avgError} min.` 
-      : avgError < -5 
-        ? `Tiendes a sobreestimar por ${Math.abs(avgError)} min.` 
-        : "¡Tus estimaciones son muy precisas!";
-
-    // 4. Medication Adherence
-    const periodLogs = medicationLogs.filter(l => l.date >= startDateStr);
-    const takenCount = periodLogs.filter(l => l.status === 'taken').length;
-    const skippedCount = periodLogs.filter(l => l.status === 'skipped').length;
-    const totalMeds = takenCount + skippedCount;
-    const adherenceRate = totalMeds > 0 ? Math.round((takenCount / totalMeds) * 100) : 0;
-
-    // 5. Discipline (Focus Logs)
-    const periodFocusLogs = focusLogs.filter(l => l.date >= startDateStr);
-    const completedSessions = periodFocusLogs.filter(l => l.status === 'completed').length;
-    const abandonedSessions = periodFocusLogs.filter(l => l.status === 'abandoned').length;
-    const totalSessions = completedSessions + abandonedSessions;
-    const disciplineRate = totalSessions > 0 ? Math.round((completedSessions / totalSessions) * 100) : 100;
-
-    return {
-      productivityData,
-      pieData,
-      estimationChartData,
-      estimationFeedback,
-      avgError,
-      adherenceRate,
-      disciplineRate,
-      completedSessions,
-      abandonedSessions,
-      totalTasks: periodTasks.length,
-      completionRate: periodTasks.length > 0 ? 100 : 0 // Simplified for completed tasks only
-    };
-  };
-
-  const stats = getStatisticsData();
-  const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#f43f5e', '#06b6d4'];
+  const stats = useStatistics(statsPeriod, tasks, tags, medicationLogs, focusLogs);
+  const COLORS = CHART_COLORS;
 
   const groupedTasks = getGroupedTasks();
   const historyData = getHistoryData();
@@ -1787,6 +1410,184 @@ export default function App() {
               {tags.length === 0 && (
                 <p className="text-center text-sm text-neutral-500 py-4">No hay etiquetas creadas.</p>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Scheduled Task Modal Overlay */}
+      {isAddingScheduledTask && (
+        <div className="fixed inset-0 z-50 bg-neutral-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-6">
+          <div className="bg-neutral-800 p-6 rounded-3xl w-full max-w-sm shadow-2xl border border-neutral-700">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <RotateCcw size={20} className="text-emerald-400" />
+                {editingScheduledTaskId ? 'Editar Tarea Programada' : 'Nueva Tarea Programada'}
+              </h3>
+              <button onClick={() => { setIsAddingScheduledTask(false); setEditingScheduledTaskId(null); }} className="text-neutral-500 hover:text-neutral-300 transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleSaveScheduledTask} className="flex flex-col gap-4">
+              <input
+                type="text"
+                placeholder="Ej. Leer 10 páginas..."
+                value={newScheduledTaskTitle}
+                onChange={(e) => setNewScheduledTaskTitle(e.target.value)}
+                className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-4 py-3 text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                autoFocus
+              />
+              
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <label className="text-xs text-neutral-500 mb-1.5 block uppercase tracking-wider font-medium">Estimación (min)</label>
+                  <div className="flex items-center bg-neutral-900 border border-neutral-700 rounded-xl overflow-hidden">
+                    <button type="button" onClick={() => setNewScheduledTaskEstimation(Math.max(5, newScheduledTaskEstimation - 5))} className="p-3 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors">
+                      <Minus size={16} />
+                    </button>
+                    <div className="flex-1 text-center font-mono text-neutral-200">{newScheduledTaskEstimation}</div>
+                    <button type="button" onClick={() => setNewScheduledTaskEstimation(newScheduledTaskEstimation + 5)} className="p-3 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors">
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="flex-1">
+                  <label className="text-xs text-neutral-500 mb-1.5 block uppercase tracking-wider font-medium">Etiqueta</label>
+                  <select
+                    value={newScheduledTaskTagId}
+                    onChange={(e) => setNewScheduledTaskTagId(e.target.value)}
+                    className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-3 text-neutral-200 focus:outline-none focus:border-emerald-500 transition-colors appearance-none"
+                  >
+                    <option value="">Ninguna</option>
+                    {tags.map(tag => (
+                      <option key={tag.id} value={tag.id}>{tag.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs text-neutral-500 mb-1.5 block uppercase tracking-wider font-medium">Frecuencia</label>
+                <select
+                  value={newScheduledTaskRecurrence.type}
+                  onChange={(e) => setNewScheduledTaskRecurrence({ ...newScheduledTaskRecurrence, type: e.target.value as any })}
+                  className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3 py-3 text-neutral-200 focus:outline-none focus:border-emerald-500 transition-colors appearance-none mb-3"
+                >
+                  <option value="daily">Diaria</option>
+                  <option value="weekly">Semanal</option>
+                  <option value="monthly">Mensual</option>
+                </select>
+
+                {newScheduledTaskRecurrence.type === 'weekly' && (
+                  <div className="flex justify-between gap-1 mt-2">
+                    {['D', 'L', 'M', 'X', 'J', 'V', 'S'].map((day, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        onClick={() => {
+                          const currentDays = newScheduledTaskRecurrence.daysOfWeek || [];
+                          const newDays = currentDays.includes(index)
+                            ? currentDays.filter(d => d !== index)
+                            : [...currentDays, index];
+                          setNewScheduledTaskRecurrence({ ...newScheduledTaskRecurrence, daysOfWeek: newDays });
+                        }}
+                        className={`w-8 h-8 rounded-full text-xs font-medium flex items-center justify-center transition-colors ${
+                          (newScheduledTaskRecurrence.daysOfWeek || []).includes(index)
+                            ? 'bg-emerald-500 text-neutral-950'
+                            : 'bg-neutral-900 text-neutral-400 border border-neutral-700'
+                        }`}
+                      >
+                        {day}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {newScheduledTaskRecurrence.type === 'monthly' && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-sm text-neutral-400">Día del mes:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="31"
+                      value={newScheduledTaskRecurrence.dayOfMonth || 1}
+                      onChange={(e) => setNewScheduledTaskRecurrence({ ...newScheduledTaskRecurrence, dayOfMonth: parseInt(e.target.value) })}
+                      className="w-16 bg-neutral-900 border border-neutral-700 rounded-xl px-2 py-1 text-center text-neutral-200 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                )}
+              </div>
+              
+              <button 
+                type="submit"
+                disabled={!newScheduledTaskTitle.trim() || isSubmittingScheduledTask}
+                className="w-full py-3 bg-emerald-500 text-neutral-950 font-semibold rounded-xl mt-2 hover:bg-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isSubmittingScheduledTask ? (
+                  <div className="w-5 h-5 border-2 border-neutral-950/30 border-t-neutral-950 rounded-full animate-spin"></div>
+                ) : (
+                  <>
+                    <Check size={20} />
+                    Guardar
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Scheduled Tasks Prompt Modal Overlay */}
+      {showScheduledPrompt && dueScheduledTasks.length > 0 && (
+        <div className="fixed inset-0 z-[60] bg-neutral-950/90 backdrop-blur-sm flex flex-col items-center justify-center p-6">
+          <div className="bg-neutral-800 p-6 rounded-3xl w-full max-w-md shadow-2xl border border-neutral-700">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Calendar size={20} className="text-emerald-400" />
+                Tareas Programadas para Hoy
+              </h3>
+            </div>
+            
+            <p className="text-sm text-neutral-400 mb-4">
+              Tienes las siguientes tareas programadas para hoy. Selecciona las que deseas agregar a tu lista actual:
+            </p>
+
+            <div className="space-y-2 mb-6 max-h-60 overflow-y-auto pr-2">
+              {dueScheduledTasks.map(st => (
+                <label key={st.id} className="flex items-center gap-3 p-3 bg-neutral-900/50 rounded-xl border border-neutral-700 cursor-pointer hover:bg-neutral-900 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={selectedScheduledTasksToAdd.includes(st.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedScheduledTasksToAdd([...selectedScheduledTasksToAdd, st.id]);
+                      } else {
+                        setSelectedScheduledTasksToAdd(selectedScheduledTasksToAdd.filter(id => id !== st.id));
+                      }
+                    }}
+                    className="w-5 h-5 rounded border-neutral-600 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-neutral-900 bg-neutral-800"
+                  />
+                  <span className="text-neutral-200">{st.title}</span>
+                </label>
+              ))}
+            </div>
+
+            <div className="flex gap-3">
+              <button 
+                onClick={handleIgnoreScheduledTasks}
+                className="flex-1 py-3 bg-neutral-900 text-neutral-400 font-semibold rounded-xl hover:bg-neutral-700 hover:text-neutral-200 transition-colors"
+              >
+                Ignorar por hoy
+              </button>
+              <button 
+                onClick={handleAddScheduledTasksToToday}
+                disabled={selectedScheduledTasksToAdd.length === 0}
+                className="flex-1 py-3 bg-emerald-500 text-neutral-950 font-semibold rounded-xl hover:bg-emerald-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Agregar Seleccionadas
+              </button>
             </div>
           </div>
         </div>
@@ -2239,7 +2040,7 @@ export default function App() {
         </div>
       )}
 
-      <main className="flex-1 p-5 overflow-y-auto flex flex-col items-center max-w-md mx-auto w-full pb-24">
+      <main className={`flex-1 p-5 overflow-y-auto flex flex-col items-center mx-auto w-full pb-24 transition-all duration-300 ${activeTab === 'tareas' && tasksLayout === 'kanban' && tasksView !== 'scheduled' ? 'max-w-5xl' : 'max-w-md'}`}>
         
         {/* PWA Install Banner */}
         {deferredPrompt && (
@@ -2390,7 +2191,7 @@ export default function App() {
               </button>
               
               <button 
-                onClick={toggleTimer}
+                onClick={handleToggleTimer}
                 disabled={isRunning || (mode === 'work' && selectedPendingTasks.length === 0)}
                 className={`col-span-1 flex flex-col items-center justify-center p-2 rounded-2xl transition-colors shadow-md ${isRunning ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed border border-neutral-700' : 'bg-emerald-500 text-neutral-950 hover:bg-emerald-400'} ${(mode === 'work' && selectedPendingTasks.length === 0 && !isRunning) ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
@@ -2632,9 +2433,33 @@ export default function App() {
                 >
                   Futuras
                 </button>
+                <button 
+                  onClick={() => setTasksView('scheduled')}
+                  className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors ${tasksView === 'scheduled' ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-400 hover:text-neutral-300'}`}
+                >
+                  Programadas
+                </button>
               </div>
               
               <div className="flex items-center gap-2">
+                {tasksView !== 'scheduled' && (
+                  <div className="flex bg-neutral-800 rounded-xl p-1 mr-2">
+                    <button 
+                      onClick={() => setTasksLayout('list')}
+                      className={`p-2 rounded-lg transition-colors ${tasksLayout === 'list' ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-400 hover:text-neutral-300'}`}
+                      title="Vista de Lista"
+                    >
+                      <List size={16} />
+                    </button>
+                    <button 
+                      onClick={() => setTasksLayout('kanban')}
+                      className={`p-2 rounded-lg transition-colors ${tasksLayout === 'kanban' ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-400 hover:text-neutral-300'}`}
+                      title="Vista de Tablero"
+                    >
+                      <LayoutGrid size={16} />
+                    </button>
+                  </div>
+                )}
                 <button 
                   onClick={() => setIsManagingTags(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-xl text-neutral-300 transition-colors text-xs font-medium"
@@ -2645,12 +2470,63 @@ export default function App() {
               </div>
             </div>
 
-            <div className="space-y-4">
-              {groupedTasks.map(({ tag, tasks, totalMinutes }) => {
-                const isExpanded = expandedTags[tag.id];
-                return (
-                  <div key={tag.id} className="bg-neutral-800/30 rounded-2xl border border-neutral-800 overflow-hidden">
-                    <button 
+            <div className={tasksLayout === 'kanban' && tasksView !== 'scheduled' ? "" : "space-y-4"}>
+              {tasksView === 'scheduled' ? (
+                <div className="space-y-4">
+                  {scheduledTasks.map(st => {
+                    const tag = tags.find(t => t.id === st.tagId);
+                    return (
+                      <div key={st.id} className="flex items-center justify-between p-4 bg-neutral-800/50 rounded-2xl border border-neutral-800 group">
+                        <div className="flex-1 flex flex-col min-w-0 mr-3">
+                          <span className="text-sm text-neutral-200 font-medium">{st.title}</span>
+                          <div className="flex items-center gap-3 mt-1.5">
+                            {tag && (
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full bg-neutral-900 border border-neutral-700 ${tag.color.replace('bg-', 'text-')}`}>
+                                {tag.name}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-neutral-500 flex items-center gap-1">
+                              <Clock size={10} /> {st.estimation}m
+                            </span>
+                            <span className="text-[10px] text-neutral-500 flex items-center gap-1">
+                              <RotateCcw size={10} /> 
+                              {st.recurrence.type === 'daily' ? 'Diaria' : 
+                               st.recurrence.type === 'weekly' ? 'Semanal' : 'Mensual'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button 
+                            onClick={() => openEditScheduledTask(st)}
+                            className="p-2 text-neutral-500 hover:text-amber-400 hover:bg-amber-400/10 rounded-lg transition-colors"
+                            title="Editar"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteScheduledTask(st.id)}
+                            className="p-2 text-neutral-500 hover:text-rose-400 hover:bg-rose-400/10 rounded-lg transition-colors"
+                            title="Eliminar"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {scheduledTasks.length === 0 && (
+                    <div className="text-center p-8 border border-dashed border-neutral-700 rounded-2xl text-neutral-500 mt-8">
+                      No tienes tareas programadas.
+                    </div>
+                  )}
+                </div>
+              ) : tasksLayout === 'list' ? (
+                <div className="space-y-4">
+                  {groupedTasks.map(({ tag, tasks, totalMinutes }) => {
+                    const isExpanded = expandedTags[tag.id];
+                    return (
+                      <div key={tag.id} className="bg-neutral-800/30 rounded-2xl border border-neutral-800 overflow-hidden">
+                        <button 
                       onClick={() => setExpandedTags(prev => ({ ...prev, [tag.id]: !prev[tag.id] }))}
                       className="w-full flex items-center justify-between p-4 bg-neutral-800/50 hover:bg-neutral-800 transition-colors"
                     >
@@ -2711,15 +2587,98 @@ export default function App() {
                 );
               })}
 
-              {groupedTasks.length === 0 && (
+              {groupedTasks.length === 0 && tasksView !== 'scheduled' && (
                 <div className="text-center p-8 border border-dashed border-neutral-700 rounded-2xl text-neutral-500 mt-8">
                   No hay tareas en esta vista.
                 </div>
               )}
+              </div>
+              ) : tasksLayout === 'kanban' ? (
+                <div className="flex gap-4 overflow-x-auto pb-4 min-h-[500px] snap-x snap-mandatory hide-scrollbar -mx-5 px-5 sm:mx-0 sm:px-0">
+                  {/* TODO Column */}
+                  <div className="w-[85vw] sm:w-[320px] md:flex-1 md:w-auto flex-shrink-0 bg-neutral-800/30 rounded-3xl border border-neutral-700/50 flex flex-col snap-center">
+                    <div className="p-4 border-b border-neutral-700/50 flex items-center justify-between">
+                      <h3 className="font-semibold text-neutral-300 flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-rose-500"></div>
+                        POR HACER
+                      </h3>
+                      <span className="text-xs font-medium text-neutral-500 bg-neutral-800 px-2 py-1 rounded-lg">
+                        {tasks.filter(t => !t.completed && (!t.timeSpent || t.timeSpent === 0)).length}
+                      </span>
+                    </div>
+                    <div className="p-4 flex-1 flex flex-col gap-3">
+                      {tasks.filter(t => !t.completed && (!t.timeSpent || t.timeSpent === 0)).map(task => (
+                        <div key={task.id} className="bg-neutral-800 p-4 rounded-2xl border border-neutral-700 hover:border-emerald-500/50 transition-colors cursor-grab active:cursor-grabbing">
+                          <h4 className="text-neutral-200 font-medium mb-2">{task.title}</h4>
+                          <div className="flex items-center gap-3 text-[10px] text-neutral-500">
+                            <span className="flex items-center gap-1"><Clock size={12} /> {task.estimation}m</span>
+                            {task.tagId && tags.find(t => t.id === task.tagId) && (
+                              <span className="flex items-center gap-1">
+                                <TagIcon size={12} /> {tags.find(t => t.id === task.tagId)?.name}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* IN PROGRESS Column */}
+                  <div className="w-[85vw] sm:w-[320px] md:flex-1 md:w-auto flex-shrink-0 bg-neutral-800/30 rounded-3xl border border-neutral-700/50 flex flex-col snap-center">
+                    <div className="p-4 border-b border-neutral-700/50 flex items-center justify-between">
+                      <h3 className="font-semibold text-neutral-300 flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-amber-500"></div>
+                        EN PROGRESO
+                      </h3>
+                      <span className="text-xs font-medium text-neutral-500 bg-neutral-800 px-2 py-1 rounded-lg">
+                        {tasks.filter(t => !t.completed && t.timeSpent && t.timeSpent > 0).length}
+                      </span>
+                    </div>
+                    <div className="p-4 flex-1 flex flex-col gap-3">
+                      {tasks.filter(t => !t.completed && t.timeSpent && t.timeSpent > 0).map(task => (
+                        <div key={task.id} className="bg-neutral-800 p-4 rounded-2xl border border-neutral-700 hover:border-emerald-500/50 transition-colors cursor-grab active:cursor-grabbing">
+                          <h4 className="text-neutral-200 font-medium mb-2">{task.title}</h4>
+                          <div className="flex items-center gap-3 text-[10px] text-neutral-500">
+                            <span className="flex items-center gap-1"><Clock size={12} /> {Math.floor(task.timeSpent! / 60)}m / {task.estimation}m</span>
+                            {task.tagId && tags.find(t => t.id === task.tagId) && (
+                              <span className="flex items-center gap-1">
+                                <TagIcon size={12} /> {tags.find(t => t.id === task.tagId)?.name}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* COMPLETED Column */}
+                  <div className="w-[85vw] sm:w-[320px] md:flex-1 md:w-auto flex-shrink-0 bg-neutral-800/30 rounded-3xl border border-neutral-700/50 flex flex-col snap-center">
+                    <div className="p-4 border-b border-neutral-700/50 flex items-center justify-between">
+                      <h3 className="font-semibold text-neutral-300 flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                        COMPLETADO
+                      </h3>
+                      <span className="text-xs font-medium text-neutral-500 bg-neutral-800 px-2 py-1 rounded-lg">
+                        {tasks.filter(t => t.completed).length}
+                      </span>
+                    </div>
+                    <div className="p-4 flex-1 flex flex-col gap-3">
+                      {tasks.filter(t => t.completed).slice(0, 10).map(task => (
+                        <div key={task.id} className="bg-neutral-800/50 p-4 rounded-2xl border border-neutral-800 opacity-75">
+                          <h4 className="text-neutral-400 font-medium mb-2 line-through">{task.title}</h4>
+                          <div className="flex items-center gap-3 text-[10px] text-neutral-600">
+                            <span className="flex items-center gap-1"><Check size={12} /> Completado</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
             
             <button 
-              onClick={() => setIsAddingTask(true)}
+              onClick={() => tasksView === 'scheduled' ? setIsAddingScheduledTask(true) : setIsAddingTask(true)}
               className="fixed bottom-24 right-6 w-14 h-14 bg-emerald-500 rounded-full flex items-center justify-center text-neutral-950 shadow-lg hover:bg-emerald-400 transition-colors z-30"
             >
               <Plus size={24} />
@@ -3068,6 +3027,95 @@ export default function App() {
                     <Bar dataKey="minutos" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={40} />
                   </BarChart>
                 </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Heatmap (Productive Hours) */}
+            <div className="bg-neutral-800 p-4 sm:p-6 rounded-3xl border border-neutral-700 mb-6">
+              <h3 className="text-sm font-semibold text-neutral-300 mb-2 sm:mb-4">Mapa de Calor (Horas Productivas)</h3>
+              <p className="text-xs text-neutral-400 mb-4 sm:mb-6">
+                Intensidad de trabajo por hora y día de la semana (minutos enfocados).
+              </p>
+              
+              <div className="w-full">
+                {/* Header: Hours */}
+                <div className="flex mb-1 sm:mb-2 ml-8 sm:ml-10">
+                  {Array(24).fill(0).map((_, i) => (
+                    <div key={i} className="flex-1 text-[8px] sm:text-[10px] text-neutral-500 text-center">
+                      <span className="block sm:hidden">{i % 6 === 0 ? i : ''}</span>
+                      <span className="hidden sm:block">{i % 2 === 0 ? i : ''}</span>
+                    </div>
+                  ))}
+                </div>
+                
+                {/* Grid */}
+                <div className="flex flex-col gap-1 sm:gap-1.5">
+                  {[1, 2, 3, 4, 5, 6, 0].map((dayIndex, i) => {
+                    const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+                    return (
+                      <div key={dayIndex} className="flex items-center gap-1 sm:gap-2">
+                        <div className="w-7 sm:w-8 text-[8px] sm:text-[10px] font-medium text-neutral-400 text-right">
+                          {dayNames[dayIndex]}
+                        </div>
+                        <div className="flex flex-1 gap-[2px] sm:gap-1">
+                          {stats.heatmapGrid[dayIndex].map((minutes, hour) => {
+                            // Calculate opacity based on max value (min 0.1 for visibility if > 0)
+                            const intensity = minutes > 0 
+                              ? Math.max(0.2, minutes / (stats.maxHeatmapValue || 1)) 
+                              : 0;
+                            
+                            return (
+                              <div 
+                                key={hour} 
+                                className="flex-1 aspect-square rounded-[2px] sm:rounded-[4px] transition-colors relative group"
+                                style={{ 
+                                  backgroundColor: minutes > 0 ? `rgba(16, 185, 129, ${intensity})` : '#262626'
+                                }}
+                              >
+                                {/* Tooltip */}
+                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10 bg-neutral-900 text-neutral-200 text-[10px] py-1 px-2 rounded border border-neutral-700 whitespace-nowrap shadow-xl">
+                                  {dayNames[dayIndex]} {hour}:00 - {Math.round(minutes)} min
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                {/* Legend and Most Productive Hours */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mt-6 pt-6 border-t border-neutral-700/50">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-medium text-neutral-400">Tus horas más productivas:</span>
+                    <div className="flex flex-wrap gap-2">
+                      {stats.mostProductiveHours && stats.mostProductiveHours.length > 0 ? (
+                        stats.mostProductiveHours.map((h, i) => (
+                          <div key={i} className="flex items-center gap-1.5 bg-neutral-900/50 border border-emerald-500/20 px-2.5 py-1 rounded-lg">
+                            <Clock size={12} className="text-emerald-500" />
+                            <span className="text-xs text-neutral-300 font-medium">{h.hour}:00</span>
+                            <span className="text-[10px] text-neutral-500">({Math.round(h.minutes)}m)</span>
+                          </div>
+                        ))
+                      ) : (
+                        <span className="text-xs text-neutral-500">Aún no hay suficientes datos.</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-[8px] sm:text-[10px] text-neutral-500 self-end sm:self-auto">
+                    <span>Menos</span>
+                    <div className="flex gap-0.5 sm:gap-1">
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 rounded-[2px] bg-[#262626]"></div>
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 rounded-[2px]" style={{ backgroundColor: 'rgba(16, 185, 129, 0.2)' }}></div>
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 rounded-[2px]" style={{ backgroundColor: 'rgba(16, 185, 129, 0.5)' }}></div>
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 rounded-[2px]" style={{ backgroundColor: 'rgba(16, 185, 129, 0.8)' }}></div>
+                      <div className="w-2 h-2 sm:w-3 sm:h-3 rounded-[2px]" style={{ backgroundColor: 'rgba(16, 185, 129, 1)' }}></div>
+                    </div>
+                    <span>Más</span>
+                  </div>
+                </div>
               </div>
             </div>
 

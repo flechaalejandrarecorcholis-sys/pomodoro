@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Mode } from '../types';
 import { playAlertSound } from '../utils/audioUtils';
 import { sendNotification } from '../utils/notifUtils';
@@ -155,7 +155,7 @@ export const useTimer = ({ hasSelectedTasks, totalEstimation, onTimerComplete, o
     }
   };
 
-  const startBreak = () => {
+  const startBreak = useCallback(() => {
     const newCount = pomodorosCompleted + 1;
     setPomodorosCompleted(newCount);
     
@@ -168,7 +168,7 @@ export const useTimer = ({ hasSelectedTasks, totalEstimation, onTimerComplete, o
       setTimeLeft(5 * 60);
       setTotalTime(5 * 60);
     }
-  };
+  }, [pomodorosCompleted, setPomodorosCompleted, setMode, setTimeLeft, setTotalTime]);
 
   const skipBreak = () => {
     setIsRunning(false);

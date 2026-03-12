@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Play, Square, Plus, Minus, RotateCcw, Bell, CheckSquare, Lightbulb, Check, X, Tags, Calendar, Clock, ChevronRight, ChevronDown, ChevronUp, Trash2, ArrowRight, Pencil, History, BellRing, AlignLeft, Pill, AlertTriangle, BarChart2, PieChart, Lock, Maximize2, Headphones, Volume2, Volume1, Folder, List, LayoutGrid, Tag as TagIcon } from 'lucide-react';
 import { collection, addDoc, onSnapshot, query, orderBy, doc, updateDoc, deleteDoc, increment, where } from 'firebase/firestore';
 import { db } from './firebase';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart as RePieChart, Pie, Cell, LineChart, Line } from 'recharts';
 
+import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { Tag, Idea, Project, Task, Reminder, Medication, MedicationLog, FocusLog, Mode } from './types';
 import { PREDEFINED_COLORS, CHART_COLORS } from './constants';
 import { getLocalDateString, formatTime, getOverdueText } from './utils/dateUtils';
@@ -997,7 +998,7 @@ export default function App() {
     selectedPendingTasksRef.current = selectedPendingTasks;
   }, [selectedPendingTasks]);
 
-  const flushTimeUpdates = async () => {
+  const flushTimeUpdates = useCallback(async () => {
     const updates = { ...pendingTimeUpdates.current };
     pendingTimeUpdates.current = {};
     
@@ -1018,36 +1019,16 @@ export default function App() {
     } catch (error) {
       console.error("Error flushing time updates", error);
     }
-  };
+  }, [setTasks]);
 
-  const handleTick = (elapsedSeconds: number, remaining: number) => {
+  const handleTick = useCallback((elapsedSeconds: number, remaining: number) => {
     selectedPendingTasksRef.current.forEach(t => {
       pendingTimeUpdates.current[t.id] = (pendingTimeUpdates.current[t.id] || 0) + elapsedSeconds;
     });
     if (remaining % 10 === 0 || remaining === 0) {
       flushTimeUpdates();
     }
-  };
-
-  const handleTimerComplete = (completedMode: Mode) => {
-    if (completedMode === 'work') {
-      flushTimeUpdates();
-      addFocusLog('completed', totalTime);
-      
-      if (selectedPendingTasksRef.current.length > 0) {
-        setTasksToReview([...selectedPendingTasksRef.current]);
-        setIsReviewing(true);
-        setReviewIndex(0);
-      } else {
-        startBreak();
-      }
-    } else {
-      setMode('work');
-      const newTime = hasSelectedTasks ? totalEstimation * 60 : 25 * 60;
-      setTimeLeft(newTime);
-      setTotalTime(newTime);
-    }
-  };
+  }, [flushTimeUpdates]);
 
   const {
     mode,
@@ -1067,9 +1048,29 @@ export default function App() {
   } = useTimer({
     hasSelectedTasks,
     totalEstimation,
-    onTimerComplete: handleTimerComplete,
+    onTimerComplete: (completedMode: Mode) => handleTimerComplete(completedMode, totalTime, startBreak, setMode, hasSelectedTasks, totalEstimation, setTimeLeft, setTotalTime),
     onTick: handleTick
   });
+
+  const handleTimerComplete = useCallback((completedMode: Mode, totalTime: number, startBreak: () => void, setMode: (mode: Mode) => void, hasSelectedTasks: boolean, totalEstimation: number, setTimeLeft: (time: number) => void, setTotalTime: (time: number) => void) => {
+    if (completedMode === 'work') {
+      flushTimeUpdates();
+      addFocusLog('completed', totalTime);
+      
+      if (selectedPendingTasksRef.current.length > 0) {
+        setTasksToReview([...selectedPendingTasksRef.current]);
+        setIsReviewing(true);
+        setReviewIndex(0);
+      } else {
+        startBreak();
+      }
+    } else {
+      setMode('work');
+      const newTime = hasSelectedTasks ? totalEstimation * 60 : 25 * 60;
+      setTimeLeft(newTime);
+      setTotalTime(newTime);
+    }
+  }, [flushTimeUpdates]);
 
   const handleToggleTimer = () => {
     if (isRunning) return;
@@ -1179,6 +1180,73 @@ export default function App() {
       flushTimeUpdates();
     }
     resetTimer();
+  };
+
+  const handleStartTimer = async (task: Task) => {
+    // Select only this task, deselect others
+    const newTasks = tasks.map(t => ({ ...t, selected: t.id === task.id }));
+    setTasks(newTasks);
+    setActiveTab('inicio');
+    
+    try {
+      // Batch update or sequential update
+      const selectedTasks = tasks.filter(t => t.selected);
+      for (const t of selectedTasks) {
+        if (t.id !== task.id) {
+          await updateDoc(doc(db, 'tasks', t.id), { selected: false });
+        }
+      }
+      if (!task.selected) {
+        await updateDoc(doc(db, 'tasks', task.id), { selected: true });
+      }
+    } catch (error) {
+      console.error("Error updating task selection for timer: ", error);
+    }
+  };
+
+  const toggleTaskCompletion = async (id: string, currentCompleted: boolean) => {
+    const todayStr = getLocalDateString();
+    const updates = { 
+      completed: !currentCompleted, 
+      completedAt: !currentCompleted ? todayStr : null,
+      selected: false // Deselect when completing
+    };
+    
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+    
+    try {
+      const taskRef = doc(db, 'tasks', id);
+      await updateDoc(taskRef, updates);
+    } catch (error) {
+      console.error("Error toggling task completion:", error);
+    }
+  };
+
+  const onDragEnd = async (result: any) => {
+    const { destination, source, draggableId } = result;
+
+    if (!destination) return;
+    if (destination.droppableId === source.droppableId && destination.index === source.index) return;
+
+    const task = tasks.find(t => t.id === draggableId);
+    if (!task) return;
+
+    let updates: any = {};
+
+    if (destination.droppableId === 'TODO') {
+      updates = { completed: false, timeSpent: 0 };
+    } else if (destination.droppableId === 'IN_PROGRESS') {
+      updates = { completed: false, timeSpent: Math.max(1, task.timeSpent || 0) };
+    } else if (destination.droppableId === 'COMPLETED') {
+      updates = { completed: true, completedAt: getLocalDateString() };
+    }
+
+    try {
+      const taskRef = doc(db, 'tasks', task.id);
+      await updateDoc(taskRef, updates);
+    } catch (error) {
+      console.error('Error updating task status:', error);
+    }
   };
 
   const getGroupedTasks = () => {
@@ -2594,86 +2662,189 @@ export default function App() {
               )}
               </div>
               ) : tasksLayout === 'kanban' ? (
-                <div className="flex gap-4 overflow-x-auto pb-4 min-h-[500px] snap-x snap-mandatory hide-scrollbar -mx-5 px-5 sm:mx-0 sm:px-0">
-                  {/* TODO Column */}
-                  <div className="w-[85vw] sm:w-[320px] md:flex-1 md:w-auto flex-shrink-0 bg-neutral-800/30 rounded-3xl border border-neutral-700/50 flex flex-col snap-center">
-                    <div className="p-4 border-b border-neutral-700/50 flex items-center justify-between">
-                      <h3 className="font-semibold text-neutral-300 flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-rose-500"></div>
-                        POR HACER
-                      </h3>
-                      <span className="text-xs font-medium text-neutral-500 bg-neutral-800 px-2 py-1 rounded-lg">
-                        {tasks.filter(t => !t.completed && (!t.timeSpent || t.timeSpent === 0)).length}
-                      </span>
-                    </div>
-                    <div className="p-4 flex-1 flex flex-col gap-3">
-                      {tasks.filter(t => !t.completed && (!t.timeSpent || t.timeSpent === 0)).map(task => (
-                        <div key={task.id} className="bg-neutral-800 p-4 rounded-2xl border border-neutral-700 hover:border-emerald-500/50 transition-colors cursor-grab active:cursor-grabbing">
-                          <h4 className="text-neutral-200 font-medium mb-2">{task.title}</h4>
-                          <div className="flex items-center gap-3 text-[10px] text-neutral-500">
-                            <span className="flex items-center gap-1"><Clock size={12} /> {task.estimation}m</span>
-                            {task.tagId && tags.find(t => t.id === task.tagId) && (
-                              <span className="flex items-center gap-1">
-                                <TagIcon size={12} /> {tags.find(t => t.id === task.tagId)?.name}
-                              </span>
-                            )}
+                <DragDropContext onDragEnd={onDragEnd}>
+                  <div className="flex gap-4 overflow-x-auto pb-4 min-h-[500px] snap-x snap-mandatory hide-scrollbar -mx-5 px-5 sm:mx-0 sm:px-0">
+                    {/* TODO Column */}
+                    <div className="w-[85vw] sm:w-[320px] md:flex-1 md:w-auto flex-shrink-0 bg-neutral-800/30 rounded-3xl border border-neutral-700/50 flex flex-col snap-center">
+                      <div className="p-4 border-b border-neutral-700/50 flex items-center justify-between">
+                        <h3 className="font-semibold text-neutral-300 flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-rose-500"></div>
+                          POR HACER
+                        </h3>
+                        <span className="text-xs font-medium text-neutral-500 bg-neutral-800 px-2 py-1 rounded-lg">
+                          {tasks.filter(t => !t.completed && (!t.timeSpent || t.timeSpent === 0)).length}
+                        </span>
+                      </div>
+                      <Droppable droppableId="TODO">
+                        {(provided) => (
+                          <div 
+                            className="p-4 flex-1 flex flex-col gap-3 min-h-[150px]"
+                            {...provided.droppableProps}
+                            ref={provided.innerRef}
+                          >
+                            {tasks.filter(t => !t.completed && (!t.timeSpent || t.timeSpent === 0)).map((task, index) => (
+                              // @ts-expect-error React 19 typing mismatch for key prop
+                              <Draggable key={task.id} draggableId={task.id} index={index}>
+                                {(provided, snapshot) => (
+                                  <div 
+                                    ref={provided.innerRef}
+                                    {...provided.draggableProps}
+                                    {...provided.dragHandleProps}
+                                    onClick={() => { setEditingTaskId(task.id); setIsAddingTask(true); }}
+                                    className={`bg-neutral-800 p-4 rounded-2xl border transition-colors cursor-grab active:cursor-grabbing group relative ${snapshot.isDragging ? 'border-emerald-500 shadow-2xl shadow-emerald-500/20 z-50' : 'border-neutral-700 hover:border-emerald-500/50'}`}
+                                  >
+                                    <h4 className="text-neutral-200 font-medium mb-2 pr-8">{task.title}</h4>
+                                    <div className="flex items-center gap-3 text-[10px] text-neutral-500">
+                                      <span className="flex items-center gap-1"><Clock size={12} /> {task.estimation}m</span>
+                                      {task.tagId && tags.find(t => t.id === task.tagId) && (
+                                        <span className="flex items-center gap-1">
+                                          <TagIcon size={12} /> {tags.find(t => t.id === task.tagId)?.name}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="absolute top-3 right-3 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); handleStartTimer(task); }}
+                                        className="w-8 h-8 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center hover:bg-emerald-500 hover:text-neutral-950 transition-colors"
+                                        title="Iniciar Pomodoro"
+                                      >
+                                        <Play size={14} className="ml-0.5" />
+                                      </button>
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); toggleTaskCompletion(task.id, task.completed); }}
+                                        className="w-8 h-8 bg-neutral-700 text-neutral-400 rounded-full flex items-center justify-center hover:bg-emerald-500 hover:text-neutral-950 transition-colors"
+                                        title="Completar"
+                                      >
+                                        <Check size={14} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </Draggable>
+                            ))}
+                            {provided.placeholder}
                           </div>
-                        </div>
-                      ))}
+                        )}
+                      </Droppable>
                     </div>
-                  </div>
 
-                  {/* IN PROGRESS Column */}
-                  <div className="w-[85vw] sm:w-[320px] md:flex-1 md:w-auto flex-shrink-0 bg-neutral-800/30 rounded-3xl border border-neutral-700/50 flex flex-col snap-center">
-                    <div className="p-4 border-b border-neutral-700/50 flex items-center justify-between">
-                      <h3 className="font-semibold text-neutral-300 flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-amber-500"></div>
-                        EN PROGRESO
-                      </h3>
-                      <span className="text-xs font-medium text-neutral-500 bg-neutral-800 px-2 py-1 rounded-lg">
-                        {tasks.filter(t => !t.completed && t.timeSpent && t.timeSpent > 0).length}
-                      </span>
-                    </div>
-                    <div className="p-4 flex-1 flex flex-col gap-3">
-                      {tasks.filter(t => !t.completed && t.timeSpent && t.timeSpent > 0).map(task => (
-                        <div key={task.id} className="bg-neutral-800 p-4 rounded-2xl border border-neutral-700 hover:border-emerald-500/50 transition-colors cursor-grab active:cursor-grabbing">
-                          <h4 className="text-neutral-200 font-medium mb-2">{task.title}</h4>
-                          <div className="flex items-center gap-3 text-[10px] text-neutral-500">
-                            <span className="flex items-center gap-1"><Clock size={12} /> {Math.floor(task.timeSpent! / 60)}m / {task.estimation}m</span>
-                            {task.tagId && tags.find(t => t.id === task.tagId) && (
-                              <span className="flex items-center gap-1">
-                                <TagIcon size={12} /> {tags.find(t => t.id === task.tagId)?.name}
-                              </span>
-                            )}
+                    {/* IN PROGRESS Column */}
+                    <div className="w-[85vw] sm:w-[320px] md:flex-1 md:w-auto flex-shrink-0 bg-neutral-800/30 rounded-3xl border border-neutral-700/50 flex flex-col snap-center">
+                      <div className="p-4 border-b border-neutral-700/50 flex items-center justify-between">
+                        <h3 className="font-semibold text-neutral-300 flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-amber-500"></div>
+                          EN PROGRESO
+                        </h3>
+                        <span className="text-xs font-medium text-neutral-500 bg-neutral-800 px-2 py-1 rounded-lg">
+                          {tasks.filter(t => !t.completed && t.timeSpent && t.timeSpent > 0).length}
+                        </span>
+                      </div>
+                      <Droppable droppableId="IN_PROGRESS">
+                        {(provided) => (
+                          <div 
+                            className="p-4 flex-1 flex flex-col gap-3 min-h-[150px]"
+                            {...provided.droppableProps}
+                            ref={provided.innerRef}
+                          >
+                            {tasks.filter(t => !t.completed && t.timeSpent && t.timeSpent > 0).map((task, index) => (
+                              // @ts-expect-error React 19 typing mismatch for key prop
+                              <Draggable key={task.id} draggableId={task.id} index={index}>
+                                {(provided, snapshot) => (
+                                  <div 
+                                    ref={provided.innerRef}
+                                    {...provided.draggableProps}
+                                    {...provided.dragHandleProps}
+                                    onClick={() => { setEditingTaskId(task.id); setIsAddingTask(true); }}
+                                    className={`bg-neutral-800 p-4 rounded-2xl border transition-colors cursor-grab active:cursor-grabbing group relative ${snapshot.isDragging ? 'border-emerald-500 shadow-2xl shadow-emerald-500/20 z-50' : 'border-neutral-700 hover:border-emerald-500/50'}`}
+                                  >
+                                    <h4 className="text-neutral-200 font-medium mb-2 pr-8">{task.title}</h4>
+                                    <div className="flex items-center gap-3 text-[10px] text-neutral-500">
+                                      <span className="flex items-center gap-1"><Clock size={12} /> {Math.floor(task.timeSpent! / 60)}m / {task.estimation}m</span>
+                                      {task.tagId && tags.find(t => t.id === task.tagId) && (
+                                        <span className="flex items-center gap-1">
+                                          <TagIcon size={12} /> {tags.find(t => t.id === task.tagId)?.name}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="absolute top-3 right-3 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); handleStartTimer(task); }}
+                                        className="w-8 h-8 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center hover:bg-emerald-500 hover:text-neutral-950 transition-colors"
+                                        title="Continuar"
+                                      >
+                                        <Play size={14} className="ml-0.5" />
+                                      </button>
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); toggleTaskCompletion(task.id, task.completed); }}
+                                        className="w-8 h-8 bg-neutral-700 text-neutral-400 rounded-full flex items-center justify-center hover:bg-emerald-500 hover:text-neutral-950 transition-colors"
+                                        title="Completar"
+                                      >
+                                        <Check size={14} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </Draggable>
+                            ))}
+                            {provided.placeholder}
                           </div>
-                        </div>
-                      ))}
+                        )}
+                      </Droppable>
                     </div>
-                  </div>
 
-                  {/* COMPLETED Column */}
-                  <div className="w-[85vw] sm:w-[320px] md:flex-1 md:w-auto flex-shrink-0 bg-neutral-800/30 rounded-3xl border border-neutral-700/50 flex flex-col snap-center">
-                    <div className="p-4 border-b border-neutral-700/50 flex items-center justify-between">
-                      <h3 className="font-semibold text-neutral-300 flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                        COMPLETADO
-                      </h3>
-                      <span className="text-xs font-medium text-neutral-500 bg-neutral-800 px-2 py-1 rounded-lg">
-                        {tasks.filter(t => t.completed).length}
-                      </span>
-                    </div>
-                    <div className="p-4 flex-1 flex flex-col gap-3">
-                      {tasks.filter(t => t.completed).slice(0, 10).map(task => (
-                        <div key={task.id} className="bg-neutral-800/50 p-4 rounded-2xl border border-neutral-800 opacity-75">
-                          <h4 className="text-neutral-400 font-medium mb-2 line-through">{task.title}</h4>
-                          <div className="flex items-center gap-3 text-[10px] text-neutral-600">
-                            <span className="flex items-center gap-1"><Check size={12} /> Completado</span>
+                    {/* COMPLETED Column */}
+                    <div className="w-[85vw] sm:w-[320px] md:flex-1 md:w-auto flex-shrink-0 bg-neutral-800/30 rounded-3xl border border-neutral-700/50 flex flex-col snap-center">
+                      <div className="p-4 border-b border-neutral-700/50 flex items-center justify-between">
+                        <h3 className="font-semibold text-neutral-300 flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                          COMPLETADO
+                        </h3>
+                        <span className="text-xs font-medium text-neutral-500 bg-neutral-800 px-2 py-1 rounded-lg">
+                          {tasks.filter(t => t.completed).length}
+                        </span>
+                      </div>
+                      <Droppable droppableId="COMPLETED">
+                        {(provided) => (
+                          <div 
+                            className="p-4 flex-1 flex flex-col gap-3 min-h-[150px]"
+                            {...provided.droppableProps}
+                            ref={provided.innerRef}
+                          >
+                            {tasks.filter(t => t.completed).slice(0, 10).map((task, index) => (
+                              // @ts-expect-error React 19 typing mismatch for key prop
+                              <Draggable key={task.id} draggableId={task.id} index={index}>
+                                {(provided, snapshot) => (
+                                  <div 
+                                    ref={provided.innerRef}
+                                    {...provided.draggableProps}
+                                    {...provided.dragHandleProps}
+                                    onClick={() => { setEditingTaskId(task.id); setIsAddingTask(true); }}
+                                    className={`bg-neutral-800/50 p-4 rounded-2xl border transition-colors cursor-grab active:cursor-grabbing group relative ${snapshot.isDragging ? 'border-emerald-500 shadow-2xl shadow-emerald-500/20 z-50 opacity-100' : 'border-neutral-800 opacity-75 hover:opacity-100'}`}
+                                  >
+                                    <h4 className="text-neutral-400 font-medium mb-2 line-through pr-8">{task.title}</h4>
+                                    <div className="flex items-center gap-3 text-[10px] text-neutral-600">
+                                      <span className="flex items-center gap-1"><Check size={12} /> Completado</span>
+                                    </div>
+                                    <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button 
+                                        onClick={(e) => { e.stopPropagation(); toggleTaskCompletion(task.id, task.completed); }}
+                                        className="w-8 h-8 bg-neutral-700 text-neutral-400 rounded-full flex items-center justify-center hover:bg-neutral-600 hover:text-neutral-200 transition-colors"
+                                        title="Deshacer"
+                                      >
+                                        <RotateCcw size={14} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </Draggable>
+                            ))}
+                            {provided.placeholder}
                           </div>
-                        </div>
-                      ))}
+                        )}
+                      </Droppable>
                     </div>
                   </div>
-                </div>
+                </DragDropContext>
               ) : null}
             </div>
             

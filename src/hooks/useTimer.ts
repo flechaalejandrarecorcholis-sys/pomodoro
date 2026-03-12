@@ -67,6 +67,17 @@ export const useTimer = ({ hasSelectedTasks, totalEstimation, onTimerComplete, o
     }));
   }, [mode, timeLeft, totalTime, isRunning, pomodorosCompleted]);
 
+  const onTimerCompleteRef = useRef(onTimerComplete);
+  const onTickRef = useRef(onTick);
+
+  useEffect(() => {
+    onTimerCompleteRef.current = onTimerComplete;
+  }, [onTimerComplete]);
+
+  useEffect(() => {
+    onTickRef.current = onTick;
+  }, [onTick]);
+
   useEffect(() => {
     // Create Web Worker for background timer
     const workerCode = `
@@ -99,7 +110,7 @@ export const useTimer = ({ hasSelectedTasks, totalEstimation, onTimerComplete, o
       
       // Notify parent of tick (for time tracking)
       if (mode === 'work') {
-        onTick(1, remaining);
+        onTickRef.current(1, remaining);
       }
 
       if (remaining === 0) {
@@ -108,10 +119,10 @@ export const useTimer = ({ hasSelectedTasks, totalEstimation, onTimerComplete, o
         
         if (mode === 'work') {
           sendNotification('¡Tiempo de Enfoque Terminado!', 'Es hora de tomar un descanso.');
-          onTimerComplete('work');
+          onTimerCompleteRef.current('work');
         } else {
           sendNotification('¡Descanso Terminado!', 'Es hora de volver al trabajo.');
-          onTimerComplete(mode);
+          onTimerCompleteRef.current(mode);
         }
       }
     };
@@ -121,7 +132,7 @@ export const useTimer = ({ hasSelectedTasks, totalEstimation, onTimerComplete, o
         workerRef.current.terminate();
       }
     };
-  }, [mode, pomodorosCompleted, hasSelectedTasks, totalEstimation, onTimerComplete, onTick]);
+  }, [mode, pomodorosCompleted, hasSelectedTasks, totalEstimation]);
 
   // Sync worker when isRunning changes
   useEffect(() => {

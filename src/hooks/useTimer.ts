@@ -138,14 +138,17 @@ export const useTimer = ({ hasSelectedTasks, totalEstimation, onTimerComplete, o
   useEffect(() => {
     if (isRunning) {
       expectedEndTimeRef.current = Date.now() + timeLeft * 1000;
-      workerRef.current?.postMessage({ 
-        command: 'start', 
-        expectedEndTime: expectedEndTimeRef.current 
-      });
+      // Ensure worker is initialized before sending message
+      if (workerRef.current) {
+        workerRef.current.postMessage({ 
+          command: 'start', 
+          expectedEndTime: expectedEndTimeRef.current 
+        });
+      }
     } else {
       workerRef.current?.postMessage({ command: 'stop' });
     }
-  }, [isRunning]);
+  }, [isRunning, timeLeft]); // Added timeLeft to dependencies to ensure it syncs correctly
 
   const toggleTimer = () => {
     setIsRunning(!isRunning);
